@@ -476,11 +476,24 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 	async setTargetPlatform(platform: CopyPlatform) {
 		this.settings.targetPlatform = platform;
 		await this.saveSettings();
+		const renders: Promise<void>[] = [];
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_WECHAT_PREVIEW)) {
 			if (leaf.view instanceof WeChatPreviewCopyView) {
 				leaf.view.syncPlatformControls();
+				renders.push(leaf.view.renderActiveFile());
 			}
 		}
+		await Promise.all(renders);
+	}
+
+	async refreshPreviewViews() {
+		const renders: Promise<void>[] = [];
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_WECHAT_PREVIEW)) {
+			if (leaf.view instanceof WeChatPreviewCopyView) {
+				renders.push(leaf.view.renderActiveFile());
+			}
+		}
+		await Promise.all(renders);
 	}
 
 	getActiveMarkdownFile(): TFile | null {
@@ -611,11 +624,13 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 class WeChatPreviewCopyView extends ItemView {
 	private currentFile: TFile | null = null;
 	private currentMarkdown = "";
+	private currentUnresolvedImages = 0;
 	private copyButton!: HTMLButtonElement;
 	private platformSelect!: HTMLSelectElement;
 	private previewEl!: HTMLElement;
 	private renderComponent: Component | null = null;
 	private renderSerial = 0;
+	private sourceEl!: HTMLElement;
 	private statusEl!: HTMLElement;
 
 	constructor(
@@ -670,8 +685,9 @@ class WeChatPreviewCopyView extends ItemView {
 		});
 
 		this.statusEl = toolbarEl.createDiv({ cls: "obsidian-to-publish-status" });
-		this.previewEl = this.contentEl.createDiv({
-			cls: "obsidian-to-publish-content markdown-rendered"
+		this.previewEl = this.contentEl.createDiv({ cls: "obsidian-to-publish-content" });
+		this.sourceEl = this.contentEl.createDiv({
+			cls: "obsidian-to-publish-source markdown-rendered"
 		});
 		this.syncPlatformControls();
 
@@ -698,10 +714,12 @@ class WeChatPreviewCopyView extends ItemView {
 		const file = this.plugin.getActiveMarkdownFile();
 		this.currentFile = file;
 		this.currentMarkdown = "";
+		this.currentUnresolvedImages = 0;
 
 		this.renderComponent?.unload();
 		this.renderComponent = null;
 		this.previewEl.empty();
+		this.sourceEl.empty();
 
 		if (!file) {
 			this.statusEl.setText("No active Markdown file");
@@ -726,11 +744,20 @@ class WeChatPreviewCopyView extends ItemView {
 		await MarkdownRenderer.render(
 			this.app,
 			markdown,
-			this.previewEl,
+			this.sourceEl,
 			file.path,
 			this.renderComponent
 		);
-		this.removePreviewRuntimeControls(serial);
+		this.removeRenderedRuntimeControls(this.sourceEl, serial);
+
+		const preview = await this.buildPlatformFragment();
+		if (serial !== this.renderSerial) {
+			return;
+		}
+
+		this.currentUnresolvedImages = preview.unresolvedImages;
+		this.previewEl.innerHTML = preview.fragment;
+		this.updateStatus(file, preview.unresolvedImages);
 	}
 
 	async copyForCurrentPlatform() {
@@ -766,11 +793,24 @@ class WeChatPreviewCopyView extends ItemView {
 		text: string;
 		unresolvedImages: number;
 	}> {
-		const clone = this.previewEl.cloneNode(true) as HTMLElement;
-		clone.classList.remove("obsidian-to-publish-content");
+		const fragment = this.previewEl.innerHTML;
+		return {
+			fragment,
+			html: wrapHtmlDocument(fragment),
+			text: this.previewEl.innerText || this.currentMarkdown,
+			unresolvedImages: this.currentUnresolvedImages
+		};
+	}
+
+	private async buildPlatformFragment(): Promise<{
+		fragment: string;
+		unresolvedImages: number;
+	}> {
+		const clone = this.sourceEl.cloneNode(true) as HTMLElement;
+		clone.classList.remove("obsidian-to-publish-source", "markdown-rendered");
 
 		if (this.plugin.settings.inlineStyles) {
-			inlineComputedStyles(this.previewEl, clone);
+			inlineComputedStyles(this.sourceEl, clone);
 		}
 
 		applyPlatformProfile(clone, this.plugin.settings.targetPlatform);
@@ -783,18 +823,15 @@ class WeChatPreviewCopyView extends ItemView {
 		replaceTaskCheckboxes(clone);
 		removeObsidianRuntimeAttributes(clone);
 
-		const fragment = wrapPlatformFragment(clone.innerHTML, this.plugin.settings.targetPlatform);
 		return {
-			fragment,
-			html: wrapHtmlDocument(fragment),
-			text: this.previewEl.innerText || this.currentMarkdown,
+			fragment: wrapPlatformFragment(clone.innerHTML, this.plugin.settings.targetPlatform),
 			unresolvedImages
 		};
 	}
 
 	private async embedLocalImages(clone: HTMLElement): Promise<number> {
 		const cloneImages = Array.from(clone.querySelectorAll("img"));
-		const sourceImages = Array.from(this.previewEl.querySelectorAll("img"));
+		const sourceImages = Array.from(this.sourceEl.querySelectorAll("img"));
 		const embeddedFiles = this.resolveEmbeddedImageFiles();
 		let embeddedFileIndex = 0;
 		let unresolved = 0;
@@ -828,20 +865,28 @@ class WeChatPreviewCopyView extends ItemView {
 		return unresolved;
 	}
 
-	private removePreviewRuntimeControls(serial: number) {
-		removeObsidianRuntimeControls(this.previewEl);
+	private removeRenderedRuntimeControls(root: HTMLElement, serial: number) {
+		removeObsidianRuntimeControls(root);
 
 		window.requestAnimationFrame(() => {
 			if (serial === this.renderSerial) {
-				removeObsidianRuntimeControls(this.previewEl);
+				removeObsidianRuntimeControls(root);
 			}
 		});
 
 		window.setTimeout(() => {
 			if (serial === this.renderSerial) {
-				removeObsidianRuntimeControls(this.previewEl);
+				removeObsidianRuntimeControls(root);
 			}
 		}, 100);
+	}
+
+	private updateStatus(file: TFile, unresolvedImages: number) {
+		const profile = this.plugin.getCurrentPlatformProfile();
+		const imageWarning = unresolvedImages === 0
+			? ""
+			: ` · ${unresolvedImages} image(s) not embedded`;
+		this.statusEl.setText(`${file.path} · Previewing ${profile.copyLabel} output${imageWarning}`);
 	}
 
 	private resolveEmbeddedImageFiles(): TFile[] {
@@ -961,6 +1006,7 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.embedLocalImages = value;
 					await this.plugin.saveSettings();
+					await this.plugin.refreshPreviewViews();
 				}));
 
 		new Setting(containerEl)
@@ -971,6 +1017,7 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.inlineStyles = value;
 					await this.plugin.saveSettings();
+					await this.plugin.refreshPreviewViews();
 				}));
 	}
 }
