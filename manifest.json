@@ -1,6 +1,6 @@
 {
-	"id": "wechat-preview-copy",
-	"name": "WeChat Preview Copy",
+	"id": "obsidian-to-publish",
+	"name": "Obsidian to Publish",
 	"version": "0.1.6",
 	"minAppVersion": "1.5.0",
 	"description": "Preview the active note in the right sidebar and copy rich HTML with embedded images for publishing platforms.",

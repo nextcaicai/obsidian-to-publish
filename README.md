@@ -1,4 +1,4 @@
-# WeChat Preview Copy
+# Obsidian to Publish
 
 An Obsidian plugin that opens a right-sidebar preview for the active Markdown note and copies rich HTML for publishing platforms.
 
@@ -32,7 +32,7 @@ npm run dev
 For manual installation, copy `manifest.json`, `main.js`, and `styles.css` into:
 
 ```text
-<Vault>/.obsidian/plugins/wechat-preview-copy/
+<Vault>/.obsidian/plugins/obsidian-to-publish/
 ```
 
 Reload Obsidian and enable the plugin from Community plugins.

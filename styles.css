@@ -1,10 +1,10 @@
-.wechat-preview-copy-view {
+.obsidian-to-publish-view {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
 }
 
-.wechat-preview-copy-toolbar {
+.obsidian-to-publish-toolbar {
 	align-items: center;
 	border-bottom: 1px solid var(--background-modifier-border);
 	display: flex;
@@ -12,16 +12,16 @@
 	padding: 8px;
 }
 
-.wechat-preview-copy-toolbar button {
+.obsidian-to-publish-toolbar button {
 	flex: 0 0 auto;
 }
 
-.wechat-preview-copy-toolbar select {
+.obsidian-to-publish-toolbar select {
 	flex: 0 0 auto;
 	max-width: 160px;
 }
 
-.wechat-preview-copy-status {
+.obsidian-to-publish-status {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	overflow: hidden;
@@ -29,13 +29,13 @@
 	white-space: nowrap;
 }
 
-.wechat-preview-copy-content {
+.obsidian-to-publish-content {
 	flex: 1 1 auto;
 	overflow: auto;
 	padding: 16px;
 }
 
-.wechat-preview-copy-empty {
+.obsidian-to-publish-empty {
 	align-items: center;
 	color: var(--text-muted);
 	display: flex;
@@ -45,15 +45,15 @@
 	text-align: center;
 }
 
-.wechat-preview-copy-content img {
+.obsidian-to-publish-content img {
 	height: auto;
 	max-width: 100%;
 }
 
-.wechat-preview-copy-content .copy-code-button,
-.wechat-preview-copy-content .code-block-copy-button,
-.wechat-preview-copy-content .clipboard-button,
-.wechat-preview-copy-content .copy-button,
-.wechat-preview-copy-content .code-copy-button {
+.obsidian-to-publish-content .copy-code-button,
+.obsidian-to-publish-content .code-block-copy-button,
+.obsidian-to-publish-content .clipboard-button,
+.obsidian-to-publish-content .copy-button,
+.obsidian-to-publish-content .code-copy-button {
 	display: none !important;
 }

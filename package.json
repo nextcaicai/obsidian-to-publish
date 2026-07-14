@@ -1,5 +1,5 @@
 {
-	"name": "obsidian-wechat-preview",
+	"name": "obsidian-to-publish",
 	"version": "0.1.6",
 	"description": "Preview the active Obsidian note in the right sidebar and copy rich HTML for publishing platforms.",
 	"main": "main.js",

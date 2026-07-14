@@ -12,7 +12,7 @@ import {
 	WorkspaceLeaf
 } from "obsidian";
 
-const VIEW_TYPE_WECHAT_PREVIEW = "wechat-preview-copy-view";
+const VIEW_TYPE_WECHAT_PREVIEW = "obsidian-to-publish-view";
 
 type CopyPlatform = "wechat" | "zhishixingqiu";
 
@@ -639,9 +639,9 @@ class WeChatPreviewCopyView extends ItemView {
 
 	async onOpen() {
 		this.contentEl.empty();
-		this.contentEl.addClass("wechat-preview-copy-view");
+		this.contentEl.addClass("obsidian-to-publish-view");
 
-		const toolbarEl = this.contentEl.createDiv({ cls: "wechat-preview-copy-toolbar" });
+		const toolbarEl = this.contentEl.createDiv({ cls: "obsidian-to-publish-toolbar" });
 
 		this.platformSelect = toolbarEl.createEl("select");
 		for (const profile of Object.values(PLATFORM_PROFILES)) {
@@ -669,9 +669,9 @@ class WeChatPreviewCopyView extends ItemView {
 			void this.renderActiveFile();
 		});
 
-		this.statusEl = toolbarEl.createDiv({ cls: "wechat-preview-copy-status" });
+		this.statusEl = toolbarEl.createDiv({ cls: "obsidian-to-publish-status" });
 		this.previewEl = this.contentEl.createDiv({
-			cls: "wechat-preview-copy-content markdown-rendered"
+			cls: "obsidian-to-publish-content markdown-rendered"
 		});
 		this.syncPlatformControls();
 
@@ -706,7 +706,7 @@ class WeChatPreviewCopyView extends ItemView {
 		if (!file) {
 			this.statusEl.setText("No active Markdown file");
 			this.previewEl.createDiv({
-				cls: "wechat-preview-copy-empty",
+				cls: "obsidian-to-publish-empty",
 				text: "Open a Markdown note to preview it here."
 			});
 			return;
@@ -767,7 +767,7 @@ class WeChatPreviewCopyView extends ItemView {
 		unresolvedImages: number;
 	}> {
 		const clone = this.previewEl.cloneNode(true) as HTMLElement;
-		clone.classList.remove("wechat-preview-copy-content");
+		clone.classList.remove("obsidian-to-publish-content");
 
 		if (this.plugin.settings.inlineStyles) {
 			inlineComputedStyles(this.previewEl, clone);
@@ -1285,7 +1285,7 @@ function wrapHtmlDocument(fragment: string): string {
 		"<html>",
 		"<head><meta charset=\"utf-8\"></head>",
 		"<body>",
-		"<section data-source=\"obsidian-wechat-preview-copy\">",
+		"<section data-source=\"obsidian-to-publish\">",
 		fragment,
 		"</section>",
 		"</body>",
