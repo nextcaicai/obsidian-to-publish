@@ -12,9 +12,23 @@ import {
 	WorkspaceLeaf
 } from "obsidian";
 
-const VIEW_TYPE_WECHAT_PREVIEW = "obsidian-to-publish-view";
+import {
+	extractMarkdownImageLinks,
+	normalizeImageLink
+} from "./rendering/image-links";
+import {
+	applyPlatformProfile,
+	isCopyPlatform,
+	PLATFORM_PROFILE_LIST,
+	PLATFORM_PROFILES,
+	wrapPlatformFragment
+} from "./platforms/profiles";
+import type {
+	CopyPlatform,
+	PlatformProfile
+} from "./platforms/types";
 
-type CopyPlatform = "wechat" | "zhishixingqiu";
+const VIEW_TYPE_WECHAT_PREVIEW = "obsidian-to-publish-view";
 
 interface WeChatPreviewCopySettings {
 	autoOpen: boolean;
@@ -23,27 +37,24 @@ interface WeChatPreviewCopySettings {
 	targetPlatform: CopyPlatform;
 }
 
+interface ClipboardPayload {
+	fragment: string;
+	html: string;
+	text: string;
+	unresolvedImages: number;
+}
+
+interface CopyResult {
+	profile: PlatformProfile;
+	unresolvedImages: number;
+}
+
 const DEFAULT_SETTINGS: WeChatPreviewCopySettings = {
 	autoOpen: true,
 	embedLocalImages: true,
 	inlineStyles: true,
 	targetPlatform: "wechat"
 };
-
-interface PlatformProfile {
-	id: CopyPlatform;
-	label: string;
-	copyLabel: string;
-	wrapperStyle: string;
-	rules: PlatformStyleRule[];
-	transform?: (root: HTMLElement) => void;
-}
-
-interface PlatformStyleRule {
-	selector: string;
-	style?: string;
-	remove?: boolean;
-}
 
 const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
 	avif: "image/avif",
@@ -122,248 +133,19 @@ const OBSIDIAN_CODE_COPY_CONTROL_SELECTORS = [
 	"pre ~ button"
 ];
 
-const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
-	wechat: {
-		id: "wechat",
-		label: "WeChat Official Account",
-		copyLabel: "WeChat",
-		wrapperStyle: [
-			"box-sizing:border-box",
-			"color:#3f3f3f",
-			"font-family:-apple-system,BlinkMacSystemFont,\"Helvetica Neue\",Helvetica,\"PingFang SC\",\"Microsoft YaHei\",Arial,sans-serif",
-			"font-size:16px",
-			"letter-spacing:0",
-			"line-height:1.75",
-			"margin:0 auto",
-			"max-width:677px",
-			"overflow-wrap:break-word",
-			"word-break:break-word"
-		].join(";"),
-		rules: [
-			{
-				selector: "h1",
-				style: "border-bottom:1px solid #e5e6eb;color:#1d2129;font-size:24px;font-weight:700;line-height:1.35;margin:1.4em 0 0.8em;padding:0 0 0.35em;"
-			},
-			{
-				selector: "h2",
-				style: "border-left:4px solid #1e80ff;color:#1d2129;font-size:20px;font-weight:700;line-height:1.45;margin:1.8em 0 0.8em;padding:0 0 0 12px;"
-			},
-			{
-				selector: "h3",
-				style: "color:#1d2129;font-size:18px;font-weight:700;line-height:1.5;margin:1.5em 0 0.7em;"
-			},
-			{
-				selector: "h4,h5,h6",
-				style: "color:#1d2129;font-size:16px;font-weight:700;line-height:1.5;margin:1.2em 0 0.6em;"
-			},
-			{
-				selector: "p",
-				style: "color:#3f3f3f;font-size:16px;line-height:1.8;margin:1em 0;"
-			},
-			{
-				selector: "strong",
-				style: "color:#1d2129;font-weight:700;"
-			},
-			{
-				selector: "em",
-				style: "color:#4e5969;font-style:italic;"
-			},
-			{
-				selector: "a",
-				style: "color:#576b95;text-decoration:none;"
-			},
-			{
-				selector: "ul,ol",
-				style: "margin:1em 0;padding-left:1.4em;"
-			},
-			{
-				selector: "li",
-				style: "color:#3f3f3f;line-height:1.8;margin:0.35em 0;"
-			},
-			{
-				selector: "blockquote",
-				style: "background:#f7f8fa;border-left:4px solid #d0d7de;color:#57606a;margin:1.2em 0;padding:12px 16px;"
-			},
-			{
-				selector: "blockquote p",
-				style: "color:#57606a;margin:0.6em 0;"
-			},
-			{
-				selector: "code",
-				style: "background:#f6f8fa;border-radius:4px;color:#d6336c;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,\"Liberation Mono\",monospace;font-size:0.9em;padding:2px 4px;"
-			},
-			{
-				selector: "pre",
-				style: "background:#f6f8fa;border-radius:6px;box-sizing:border-box;color:#24292f;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,\"Liberation Mono\",monospace;font-size:14px;line-height:1.65;margin:1.2em 0;overflow-x:auto;padding:12px 14px;white-space:pre-wrap;word-break:break-word;"
-			},
-			{
-				selector: "pre code",
-				style: "background:transparent;color:#24292f;font-size:14px;line-height:1.65;padding:0;"
-			},
-			{
-				selector: "table",
-				style: "border-collapse:collapse;border-spacing:0;margin:1.2em 0;width:100%;"
-			},
-			{
-				selector: "th,td",
-				style: "border:1px solid #d8dee4;color:#3f3f3f;font-size:15px;line-height:1.6;padding:8px 10px;text-align:left;vertical-align:top;"
-			},
-			{
-				selector: "th",
-				style: "background:#f6f8fa;color:#1d2129;font-weight:700;"
-			},
-			{
-				selector: "img",
-				style: "border-radius:4px;display:block;height:auto;margin:16px auto;max-width:100%;"
-			},
-			{
-				selector: "hr",
-				style: "border:0;border-top:1px solid #e5e6eb;margin:2em 0;"
-			},
-			{
-				selector: ".callout",
-				style: "background:#f7fbff;border-left:4px solid #1e80ff;border-radius:6px;box-sizing:border-box;color:#3f3f3f;margin:1.2em 0;padding:12px 16px;"
-			},
-			{
-				selector: ".callout-title",
-				style: "color:#1d2129;font-size:16px;font-weight:700;line-height:1.6;margin:0 0 6px;"
-			},
-			{
-				selector: ".callout-content",
-				style: "color:#3f3f3f;font-size:16px;line-height:1.8;"
-			},
-			{
-				selector: ".callout-icon,.heading-collapse-indicator,.collapse-indicator",
-				remove: true
-			}
-		],
-		transform: transformWechatArticle
-	},
-	zhishixingqiu: {
-		id: "zhishixingqiu",
-		label: "知识星球",
-		copyLabel: "知识星球",
-		wrapperStyle: [
-			"box-sizing:border-box",
-			"color:#2f3033",
-			"font-family:-apple-system,BlinkMacSystemFont,\"Helvetica Neue\",Helvetica,\"PingFang SC\",\"Microsoft YaHei\",Arial,sans-serif",
-			"font-size:16px",
-			"letter-spacing:0",
-			"line-height:1.75",
-			"margin:0",
-			"max-width:100%",
-			"overflow-wrap:break-word",
-			"word-break:break-word"
-		].join(";"),
-		rules: [
-			{
-				selector: "h1",
-				style: "color:#1d2129;font-size:24px;font-weight:700;line-height:1.4;margin:1.2em 0 0.8em;"
-			},
-			{
-				selector: "h2",
-				style: "color:#1d2129;font-size:21px;font-weight:700;line-height:1.45;margin:1.4em 0 0.75em;"
-			},
-			{
-				selector: "h3",
-				style: "color:#1d2129;font-size:18px;font-weight:700;line-height:1.5;margin:1.2em 0 0.65em;"
-			},
-			{
-				selector: "h4,h5,h6",
-				style: "color:#1d2129;font-size:16px;font-weight:700;line-height:1.5;margin:1em 0 0.55em;"
-			},
-			{
-				selector: "p",
-				style: "color:#2f3033;font-size:16px;line-height:1.8;margin:0;"
-			},
-			{
-				selector: "strong",
-				style: "color:#1d2129;font-weight:700;"
-			},
-			{
-				selector: "em",
-				style: "color:#515866;font-style:italic;"
-			},
-			{
-				selector: "a",
-				style: "color:#246bfe;text-decoration:none;"
-			},
-			{
-				selector: "ul,ol",
-				style: "margin:0;padding-left:1.4em;"
-			},
-			{
-				selector: "li",
-				style: "color:#2f3033;line-height:1.8;margin:0.2em 0;"
-			},
-			{
-				selector: "blockquote",
-				style: "background:#f7f8fa;border-left:4px solid #d7dce5;color:#515866;margin:0;padding:12px 16px;"
-			},
-			{
-				selector: "blockquote p",
-				style: "color:#515866;margin:0;"
-			},
-			{
-				selector: "code",
-				style: "background:#f5f6f8;border-radius:4px;color:#d6336c;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,\"Liberation Mono\",monospace;font-size:0.9em;padding:2px 4px;"
-			},
-			{
-				selector: "pre",
-				style: "background:#f5f6f8;border-radius:6px;box-sizing:border-box;color:#24292f;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,\"Liberation Mono\",monospace;font-size:14px;line-height:1.65;margin:0;overflow-x:auto;padding:12px 14px;white-space:pre-wrap;word-break:break-word;"
-			},
-			{
-				selector: "pre code",
-				style: "background:transparent;color:#24292f;font-size:14px;line-height:1.65;padding:0;"
-			},
-			{
-				selector: "table",
-				style: "border-collapse:collapse;border-spacing:0;margin:0;width:100%;"
-			},
-			{
-				selector: "th,td",
-				style: "border:1px solid #d8dee4;color:#2f3033;font-size:15px;line-height:1.6;padding:8px 10px;text-align:left;vertical-align:top;"
-			},
-			{
-				selector: "th",
-				style: "background:#f5f6f8;color:#1d2129;font-weight:700;"
-			},
-			{
-				selector: "img",
-				style: "border-radius:4px;display:block;height:auto;margin:0 auto;max-width:100%;"
-			},
-			{
-				selector: "hr",
-				style: "border:0;border-top:1px solid #e5e6eb;margin:0;"
-			},
-			{
-				selector: ".callout",
-				style: "background:#f7fbff;border-left:4px solid #246bfe;border-radius:6px;box-sizing:border-box;color:#2f3033;margin:0;padding:12px 16px;"
-			},
-			{
-				selector: ".callout-title",
-				style: "color:#1d2129;font-size:16px;font-weight:700;line-height:1.6;margin:0 0 6px;"
-			},
-			{
-				selector: ".callout-content",
-				style: "color:#2f3033;font-size:16px;line-height:1.8;"
-			},
-			{
-				selector: ".callout-icon,.heading-collapse-indicator,.collapse-indicator",
-				remove: true
-			}
-		],
-		transform: transformZhishixingqiuArticle
-	}
-};
-
 export default class WeChatPreviewCopyPlugin extends Plugin {
 	settings: WeChatPreviewCopySettings = DEFAULT_SETTINGS;
 	private lastMarkdownFile: TFile | null = null;
 	private refreshTimer: number | null = null;
 
 	async onload() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const loadedSettings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = {
+			...loadedSettings,
+			targetPlatform: isCopyPlatform(loadedSettings.targetPlatform)
+				? loadedSettings.targetPlatform
+				: DEFAULT_SETTINGS.targetPlatform
+		};
 		this.rememberActiveMarkdownFile();
 
 		this.registerView(
@@ -388,6 +170,14 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 			name: "Copy current note for target platform",
 			callback: () => {
 				void this.copyCurrentNoteForTargetPlatform();
+			}
+		});
+
+		this.addCommand({
+			id: "copy-current-note-and-open-editor",
+			name: "Copy current note and open target platform editor",
+			callback: () => {
+				void this.copyCurrentNoteAndOpenEditor();
 			}
 		});
 
@@ -461,6 +251,16 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		if (leaf.view instanceof WeChatPreviewCopyView) {
 			await leaf.view.renderActiveFile();
 			await leaf.view.copyForCurrentPlatform();
+		}
+	}
+
+	async copyCurrentNoteAndOpenEditor() {
+		const leaf = await this.getOrCreatePreviewLeaf();
+		this.app.workspace.revealLeaf(leaf);
+
+		if (leaf.view instanceof WeChatPreviewCopyView) {
+			await leaf.view.renderActiveFile();
+			await leaf.view.copyAndOpenCurrentPlatform();
 		}
 	}
 
@@ -626,6 +426,7 @@ class WeChatPreviewCopyView extends ItemView {
 	private currentMarkdown = "";
 	private currentUnresolvedImages = 0;
 	private copyButton!: HTMLButtonElement;
+	private openEditorButton!: HTMLButtonElement;
 	private platformSelect!: HTMLSelectElement;
 	private previewEl!: HTMLElement;
 	private renderComponent: Component | null = null;
@@ -659,7 +460,7 @@ class WeChatPreviewCopyView extends ItemView {
 		const toolbarEl = this.contentEl.createDiv({ cls: "obsidian-to-publish-toolbar" });
 
 		this.platformSelect = toolbarEl.createEl("select");
-		for (const profile of Object.values(PLATFORM_PROFILES)) {
+		for (const profile of PLATFORM_PROFILE_LIST) {
 			this.platformSelect.createEl("option", {
 				attr: { value: profile.id },
 				text: profile.label
@@ -679,6 +480,11 @@ class WeChatPreviewCopyView extends ItemView {
 			void this.copyForCurrentPlatform();
 		});
 
+		this.openEditorButton = toolbarEl.createEl("button", { text: "" });
+		this.openEditorButton.addEventListener("click", () => {
+			void this.copyAndOpenCurrentPlatform();
+		});
+
 		const refreshButton = toolbarEl.createEl("button", { text: "Refresh" });
 		refreshButton.addEventListener("click", () => {
 			void this.renderActiveFile();
@@ -695,13 +501,18 @@ class WeChatPreviewCopyView extends ItemView {
 	}
 
 	syncPlatformControls() {
-		if (!this.copyButton || !this.platformSelect) {
+		if (!this.copyButton || !this.openEditorButton || !this.platformSelect) {
 			return;
 		}
 
 		const profile = this.plugin.getCurrentPlatformProfile();
+		const canOpenEditor = isSafeEditorUrl(profile.editorUrl);
 		this.platformSelect.value = profile.id;
 		this.copyButton.setText(`Copy for ${profile.copyLabel}`);
+		this.openEditorButton.disabled = !canOpenEditor;
+		this.openEditorButton.setText(
+			canOpenEditor ? `Copy & open ${profile.copyLabel}` : `No editor URL for ${profile.copyLabel}`
+		);
 	}
 
 	async onClose() {
@@ -760,39 +571,63 @@ class WeChatPreviewCopyView extends ItemView {
 		this.updateStatus(file, preview.unresolvedImages);
 	}
 
-	async copyForCurrentPlatform() {
+	async copyForCurrentPlatform(options: {
+		notifyFailure?: boolean;
+		notifySuccess?: boolean;
+	} = {}): Promise<CopyResult | null> {
+		const shouldNotifyFailure = options.notifyFailure !== false;
+		const shouldNotifySuccess = options.notifySuccess !== false;
 		if (!this.currentFile) {
-			new Notice("Open a Markdown note before copying.");
-			return;
+			if (shouldNotifyFailure) {
+				new Notice("Open a Markdown note before copying.");
+			}
+			return null;
 		}
 
 		await this.renderActiveFile();
 		if (!this.currentFile) {
-			new Notice("Open a Markdown note before copying.");
-			return;
+			if (shouldNotifyFailure) {
+				new Notice("Open a Markdown note before copying.");
+			}
+			return null;
 		}
 
 		try {
 			const clipboard = await this.buildClipboardPayload();
-			await writeRichClipboard(clipboard.html, clipboard.fragment, clipboard.text);
-
 			const profile = this.plugin.getCurrentPlatformProfile();
-			const suffix = clipboard.unresolvedImages === 0
-				? ""
-				: ` (${clipboard.unresolvedImages} image(s) could not be embedded)`;
-			new Notice(`Copied for ${profile.copyLabel}${suffix}.`);
+			await writePlatformClipboard(profile, clipboard, this.currentMarkdown);
+
+			if (shouldNotifySuccess) {
+				new Notice(getCopyNotice(profile, clipboard.unresolvedImages));
+			}
+			return {
+				profile,
+				unresolvedImages: clipboard.unresolvedImages
+			};
 		} catch (error) {
 			console.error(error);
-			new Notice("Copy failed. See console for details.");
+			if (shouldNotifyFailure) {
+				new Notice("Copy failed. See console for details.");
+			}
+			return null;
 		}
 	}
 
-	private async buildClipboardPayload(): Promise<{
-		fragment: string;
-		html: string;
-		text: string;
-		unresolvedImages: number;
-	}> {
+	async copyAndOpenCurrentPlatform() {
+		const result = await this.copyForCurrentPlatform({ notifySuccess: false });
+		if (!result) {
+			return;
+		}
+
+		const opened = openPlatformEditor(result.profile.editorUrl);
+		if (opened) {
+			new Notice(getCopyAndOpenNotice(result.profile, result.unresolvedImages));
+		} else {
+			new Notice(`${getCopyNotice(result.profile, result.unresolvedImages)} Open ${result.profile.editorUrl} manually.`);
+		}
+	}
+
+	private async buildClipboardPayload(): Promise<ClipboardPayload> {
 		const fragment = this.previewEl.innerHTML;
 		return {
 			fragment,
@@ -883,10 +718,12 @@ class WeChatPreviewCopyView extends ItemView {
 
 	private updateStatus(file: TFile, unresolvedImages: number) {
 		const profile = this.plugin.getCurrentPlatformProfile();
-		const imageWarning = unresolvedImages === 0
-			? ""
-			: ` · ${unresolvedImages} image(s) not embedded`;
-		this.statusEl.setText(`${file.path} · Previewing ${profile.copyLabel} output${imageWarning}`);
+		const imageWarning = profile.capabilities.requiresManualImageUpload
+			? " · images may need manual upload"
+			: unresolvedImages === 0
+				? ""
+				: ` · ${unresolvedImages} image(s) not embedded`;
+		this.statusEl.setText(`${file.path} · Previewing ${getClipboardFormatLabel(profile)} for ${profile.copyLabel}${imageWarning}`);
 	}
 
 	private resolveEmbeddedImageFiles(): TFile[] {
@@ -985,7 +822,7 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 			.setName("Copy profile")
 			.setDesc("Choose the target platform formatting profile.")
 			.addDropdown((dropdown) => {
-				for (const profile of Object.values(PLATFORM_PROFILES)) {
+				for (const profile of PLATFORM_PROFILE_LIST) {
 					dropdown.addOption(profile.id, profile.label);
 				}
 
@@ -1028,109 +865,6 @@ function isImageFile(file: TFile): boolean {
 
 function isPortableImageSource(src: string): boolean {
 	return src.startsWith("data:") || src.startsWith("http://") || src.startsWith("https://");
-}
-
-function isCopyPlatform(value: string): value is CopyPlatform {
-	return value in PLATFORM_PROFILES;
-}
-
-function applyPlatformProfile(root: HTMLElement, platform: CopyPlatform) {
-	const profile = PLATFORM_PROFILES[platform];
-
-	for (const rule of profile.rules) {
-		for (const element of Array.from(root.querySelectorAll(rule.selector))) {
-			if (!(element instanceof HTMLElement)) {
-				continue;
-			}
-
-			if (rule.remove) {
-				element.remove();
-			} else if (rule.style) {
-				appendInlineStyle(element, rule.style);
-			}
-		}
-	}
-
-	profile.transform?.(root);
-}
-
-function transformWechatArticle(root: HTMLElement) {
-	for (const link of Array.from(root.querySelectorAll<HTMLAnchorElement>("a.internal-link"))) {
-		link.removeAttribute("href");
-		link.setAttribute("title", "Internal Obsidian link");
-		appendInlineStyle(link, "color:#3f3f3f;text-decoration:none;");
-	}
-
-	for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>("p:empty"))) {
-		paragraph.remove();
-	}
-}
-
-function transformZhishixingqiuArticle(root: HTMLElement) {
-	for (const link of Array.from(root.querySelectorAll<HTMLAnchorElement>("a.internal-link"))) {
-		link.removeAttribute("href");
-		link.setAttribute("title", "Internal Obsidian link");
-		appendInlineStyle(link, "color:#2f3033;text-decoration:none;");
-	}
-
-	for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>("p:empty"))) {
-		turnIntoZhishixingqiuSpacer(paragraph);
-	}
-
-	insertZhishixingqiuSpacers(root);
-}
-
-function insertZhishixingqiuSpacers(root: HTMLElement) {
-	const children = Array.from(root.children);
-
-	for (let index = 0; index < children.length - 1; index += 1) {
-		const current = children[index];
-		const next = children[index + 1];
-
-		if (!isZhishixingqiuBlock(current) || !isZhishixingqiuBlock(next)) {
-			continue;
-		}
-
-		const spacer = document.createElement("p");
-		turnIntoZhishixingqiuSpacer(spacer);
-		current.after(spacer);
-	}
-}
-
-function turnIntoZhishixingqiuSpacer(element: HTMLElement) {
-	element.innerHTML = "&nbsp;";
-	element.classList.add("zhishixingqiu-spacer");
-	element.setAttribute("style", [
-		"color:transparent",
-		"font-size:16px",
-		"line-height:1.2",
-		"margin:0",
-		"min-height:1.2em"
-	].join(";"));
-}
-
-function isZhishixingqiuBlock(element: Element): boolean {
-	if (element.classList.contains("zhishixingqiu-spacer")) {
-		return false;
-	}
-
-	const tagName = element.tagName.toLowerCase();
-	return [
-		"blockquote",
-		"h1",
-		"h2",
-		"h3",
-		"h4",
-		"h5",
-		"h6",
-		"hr",
-		"img",
-		"ol",
-		"p",
-		"pre",
-		"table",
-		"ul"
-	].includes(tagName) || element.classList.contains("callout");
 }
 
 function removeObsidianRuntimeControls(root: HTMLElement) {
@@ -1188,60 +922,6 @@ function isNearCodeBlock(element: Element): boolean {
 		|| element.previousElementSibling?.tagName.toLowerCase() === "pre"
 		|| element.nextElementSibling?.tagName.toLowerCase() === "pre"
 	);
-}
-
-function wrapPlatformFragment(fragment: string, platform: CopyPlatform): string {
-	const profile = PLATFORM_PROFILES[platform];
-	const wrapper = document.createElement("section");
-	wrapper.setAttribute("style", profile.wrapperStyle);
-	wrapper.innerHTML = fragment;
-	return wrapper.outerHTML;
-}
-
-function normalizeImageLink(link: string): string {
-	let value = link.trim();
-	if (!value) {
-		return "";
-	}
-
-	const pipeIndex = value.indexOf("|");
-	if (pipeIndex >= 0) {
-		value = value.slice(0, pipeIndex);
-	}
-
-	const hashIndex = value.indexOf("#");
-	if (hashIndex >= 0) {
-		value = value.slice(0, hashIndex);
-	}
-
-	if (value.startsWith("<") && value.includes(">")) {
-		value = value.slice(1, value.indexOf(">"));
-	}
-
-	const titleIndex = value.search(/\s+["']/);
-	if (titleIndex > 0) {
-		value = value.slice(0, titleIndex);
-	}
-
-	try {
-		value = decodeURIComponent(value);
-	} catch {
-		// Keep the original value if it is not URI encoded.
-	}
-
-	return value.trim();
-}
-
-function extractMarkdownImageLinks(markdown: string): string[] {
-	const links: string[] = [];
-	const markdownImagePattern = /!\[[^\]]*]\(([^)]+)\)/g;
-	let match: RegExpExecArray | null;
-
-	while ((match = markdownImagePattern.exec(markdown)) !== null) {
-		links.push(normalizeImageLink(match[1]));
-	}
-
-	return links;
 }
 
 function inlineComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElement) {
@@ -1340,6 +1020,81 @@ function wrapHtmlDocument(fragment: string): string {
 	].join("");
 }
 
+async function writePlatformClipboard(profile: PlatformProfile, clipboard: ClipboardPayload, markdown: string) {
+	if (profile.preferredFormat === "rich-html") {
+		await writeRichClipboard(clipboard.html, clipboard.fragment, clipboard.text);
+		return;
+	}
+
+	await writeTextClipboard(getTextClipboardContent(profile, markdown, clipboard.text));
+}
+
+function getTextClipboardContent(profile: PlatformProfile, markdown: string, text: string): string {
+	if (profile.preferredFormat === "markdown") {
+		return markdown.trim() ? markdown : text;
+	}
+
+	return text.trim() ? text : markdown;
+}
+
+function getCopyNotice(profile: PlatformProfile, unresolvedImages: number): string {
+	return `Copied ${getClipboardFormatLabel(profile)} for ${profile.copyLabel}${getImageNoticeSuffix(profile, unresolvedImages)}.`;
+}
+
+function getCopyAndOpenNotice(profile: PlatformProfile, unresolvedImages: number): string {
+	return `Copied ${getClipboardFormatLabel(profile)} for ${profile.copyLabel} and opened editor${getImageNoticeSuffix(profile, unresolvedImages)}.`;
+}
+
+function getClipboardFormatLabel(profile: PlatformProfile): string {
+	if (profile.preferredFormat === "markdown") {
+		return "Markdown";
+	}
+
+	if (profile.preferredFormat === "plain-text") {
+		return "plain text";
+	}
+
+	return "rich HTML";
+}
+
+function getImageNoticeSuffix(profile: PlatformProfile, unresolvedImages: number): string {
+	if (profile.capabilities.requiresManualImageUpload) {
+		return " (images may need manual upload)";
+	}
+
+	return unresolvedImages === 0
+		? ""
+		: ` (${unresolvedImages} image(s) could not be embedded)`;
+}
+
+function isSafeEditorUrl(url: string): boolean {
+	try {
+		return new URL(url).protocol === "https:";
+	} catch {
+		return false;
+	}
+}
+
+function openPlatformEditor(url: string): boolean {
+	if (!isSafeEditorUrl(url)) {
+		return false;
+	}
+
+	try {
+		const anchor = document.createElement("a");
+		anchor.href = url;
+		anchor.rel = "noopener noreferrer";
+		anchor.target = "_blank";
+		document.body.appendChild(anchor);
+		anchor.click();
+		anchor.remove();
+		return true;
+	} catch (error) {
+		console.error(`Unable to open platform editor: ${url}`, error);
+		return false;
+	}
+}
+
 async function writeRichClipboard(html: string, fragment: string, text: string) {
 	if (navigator.clipboard?.write && "ClipboardItem" in window) {
 		const item = new ClipboardItem({
@@ -1354,7 +1109,20 @@ async function writeRichClipboard(html: string, fragment: string, text: string) 
 		return;
 	}
 
-	await navigator.clipboard.writeText(text);
+	await writeTextClipboard(text);
+}
+
+async function writeTextClipboard(text: string) {
+	if (navigator.clipboard?.writeText) {
+		await navigator.clipboard.writeText(text);
+		return;
+	}
+
+	if (copyTextWithSelection(text)) {
+		return;
+	}
+
+	throw new Error("Clipboard text API is not available.");
 }
 
 function copyHtmlWithSelection(fragment: string): boolean {
@@ -1383,6 +1151,26 @@ function copyHtmlWithSelection(fragment: string): boolean {
 	} finally {
 		selection.removeAllRanges();
 		container.remove();
+	}
+
+	return copied;
+}
+
+function copyTextWithSelection(text: string): boolean {
+	const textarea = document.createElement("textarea");
+	textarea.value = text;
+	textarea.style.left = "-99999px";
+	textarea.style.position = "fixed";
+	textarea.style.top = "0";
+	document.body.appendChild(textarea);
+	textarea.focus();
+	textarea.select();
+
+	let copied = false;
+	try {
+		copied = document.execCommand("copy");
+	} finally {
+		textarea.remove();
 	}
 
 	return copied;

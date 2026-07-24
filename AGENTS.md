@@ -18,6 +18,8 @@
 - 安装依赖：`npm install`
 - 开发监听：`npm run dev`
 - 生产构建与类型检查：`npm run build`
+- 自动化测试：`npm test`
+- 测试监听：`npm run test:watch`
 - 当前项目没有 lint 脚本时，不要假装已执行 lint；如需新增 lint，先说明原因。
 
 ## Obsidian 插件开发规则
