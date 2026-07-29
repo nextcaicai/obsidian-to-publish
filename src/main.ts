@@ -7,6 +7,7 @@ import {
 	Notice,
 	Plugin,
 	PluginSettingTab,
+	Platform,
 	Setting,
 	TFile,
 	WorkspaceLeaf
@@ -40,14 +41,26 @@ interface WeChatPreviewCopySettings {
 interface ClipboardPayload {
 	fragment: string;
 	html: string;
+	image: ClipboardImagePayload | null;
+	imageCount: number;
 	text: string;
 	unresolvedImages: number;
 }
 
+interface ClipboardImagePayload {
+	blob: Blob;
+	file: TFile;
+	mime: string;
+}
+
 interface CopyResult {
+	imageCount: number;
+	hasClipboardImage: boolean;
 	profile: PlatformProfile;
 	unresolvedImages: number;
 }
+
+type RuntimeRequire = (moduleName: string) => unknown;
 
 const DEFAULT_SETTINGS: WeChatPreviewCopySettings = {
 	autoOpen: true,
@@ -153,13 +166,13 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 			(leaf) => new WeChatPreviewCopyView(leaf, this)
 		);
 
-		this.addRibbonIcon("copy", "Open copy preview", () => {
+		this.addRibbonIcon("copy", "打开发布预览", () => {
 			void this.activateView();
 		});
 
 		this.addCommand({
 			id: "open-copy-preview",
-			name: "Open copy preview in right sidebar",
+			name: "打开发布预览",
 			callback: () => {
 				void this.activateView();
 			}
@@ -167,7 +180,7 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 
 		this.addCommand({
 			id: "copy-current-note-for-target-platform",
-			name: "Copy current note for target platform",
+			name: "复制当前笔记到目标平台",
 			callback: () => {
 				void this.copyCurrentNoteForTargetPlatform();
 			}
@@ -175,7 +188,7 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 
 		this.addCommand({
 			id: "copy-current-note-and-open-editor",
-			name: "Copy current note and open target platform editor",
+			name: "复制当前笔记并打开平台编辑器",
 			callback: () => {
 				void this.copyCurrentNoteAndOpenEditor();
 			}
@@ -183,7 +196,7 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 
 		this.addCommand({
 			id: "copy-current-note-for-wechat",
-			name: "Copy current note for WeChat",
+			name: "复制当前笔记到微信公众号",
 			callback: () => {
 				void this.copyCurrentNoteForPlatform("wechat");
 			}
@@ -191,7 +204,7 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 
 		this.addCommand({
 			id: "copy-current-note-for-zhishixingqiu",
-			name: "Copy current note for 知识星球",
+			name: "复制当前笔记到知识星球",
 			callback: () => {
 				void this.copyCurrentNoteForPlatform("zhishixingqiu");
 			}
@@ -332,6 +345,20 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		return `data:${mime};base64,${arrayBufferToBase64(buffer)}`;
 	}
 
+	async fileToClipboardImage(file: TFile): Promise<ClipboardImagePayload> {
+		const mime = IMAGE_MIME_BY_EXTENSION[file.extension.toLowerCase()];
+		if (!mime) {
+			throw new Error(`Unsupported image type: ${file.extension}`);
+		}
+
+		const buffer = await this.app.vault.readBinary(file);
+		return {
+			blob: new Blob([buffer], { type: mime }),
+			file,
+			mime
+		};
+	}
+
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
@@ -446,7 +473,7 @@ class WeChatPreviewCopyView extends ItemView {
 	}
 
 	getDisplayText() {
-		return "Copy Preview";
+		return "发布预览";
 	}
 
 	getIcon() {
@@ -485,7 +512,7 @@ class WeChatPreviewCopyView extends ItemView {
 			void this.copyAndOpenCurrentPlatform();
 		});
 
-		const refreshButton = toolbarEl.createEl("button", { text: "Refresh" });
+		const refreshButton = toolbarEl.createEl("button", { text: "刷新" });
 		refreshButton.addEventListener("click", () => {
 			void this.renderActiveFile();
 		});
@@ -508,10 +535,10 @@ class WeChatPreviewCopyView extends ItemView {
 		const profile = this.plugin.getCurrentPlatformProfile();
 		const canOpenEditor = isSafeEditorUrl(profile.editorUrl);
 		this.platformSelect.value = profile.id;
-		this.copyButton.setText(`Copy for ${profile.copyLabel}`);
+		this.copyButton.setText("复制");
 		this.openEditorButton.disabled = !canOpenEditor;
 		this.openEditorButton.setText(
-			canOpenEditor ? `Copy & open ${profile.copyLabel}` : `No editor URL for ${profile.copyLabel}`
+			canOpenEditor ? "复制并打开" : "无可用编辑器入口"
 		);
 	}
 
@@ -533,10 +560,10 @@ class WeChatPreviewCopyView extends ItemView {
 		this.sourceEl.empty();
 
 		if (!file) {
-			this.statusEl.setText("No active Markdown file");
+			this.statusEl.setText("未打开 Markdown 笔记");
 			this.previewEl.createDiv({
 				cls: "obsidian-to-publish-empty",
-				text: "Open a Markdown note to preview it here."
+				text: "打开一篇 Markdown 笔记后在这里预览。"
 			});
 			return;
 		}
@@ -579,7 +606,7 @@ class WeChatPreviewCopyView extends ItemView {
 		const shouldNotifySuccess = options.notifySuccess !== false;
 		if (!this.currentFile) {
 			if (shouldNotifyFailure) {
-				new Notice("Open a Markdown note before copying.");
+				new Notice("请先打开一篇 Markdown 笔记。");
 			}
 			return null;
 		}
@@ -587,7 +614,7 @@ class WeChatPreviewCopyView extends ItemView {
 		await this.renderActiveFile();
 		if (!this.currentFile) {
 			if (shouldNotifyFailure) {
-				new Notice("Open a Markdown note before copying.");
+				new Notice("请先打开一篇 Markdown 笔记。");
 			}
 			return null;
 		}
@@ -595,19 +622,22 @@ class WeChatPreviewCopyView extends ItemView {
 		try {
 			const clipboard = await this.buildClipboardPayload();
 			const profile = this.plugin.getCurrentPlatformProfile();
-			await writePlatformClipboard(profile, clipboard, this.currentMarkdown);
-
-			if (shouldNotifySuccess) {
-				new Notice(getCopyNotice(profile, clipboard.unresolvedImages));
-			}
-			return {
+			const hasClipboardImage = await writePlatformClipboard(profile, clipboard, this.currentMarkdown);
+			const result: CopyResult = {
+				hasClipboardImage,
+				imageCount: clipboard.imageCount,
 				profile,
 				unresolvedImages: clipboard.unresolvedImages
 			};
+
+			if (shouldNotifySuccess) {
+				new Notice(getCopyNotice(profile, result));
+			}
+			return result;
 		} catch (error) {
 			console.error(error);
 			if (shouldNotifyFailure) {
-				new Notice("Copy failed. See console for details.");
+				new Notice("复制失败，请查看控制台。");
 			}
 			return null;
 		}
@@ -619,28 +649,66 @@ class WeChatPreviewCopyView extends ItemView {
 			return;
 		}
 
-		const opened = openPlatformEditor(result.profile.editorUrl);
+		const opened = await openPlatformEditor(result.profile.editorUrl);
 		if (opened) {
-			new Notice(getCopyAndOpenNotice(result.profile, result.unresolvedImages));
+			new Notice(getCopyAndOpenNotice(result));
 		} else {
-			new Notice(`${getCopyNotice(result.profile, result.unresolvedImages)} Open ${result.profile.editorUrl} manually.`);
+			new Notice(`${getCopyNotice(result.profile, result)} 无法自动打开编辑器，请手动打开：${result.profile.editorUrl}`);
 		}
 	}
 
 	private async buildClipboardPayload(): Promise<ClipboardPayload> {
+		const profile = this.plugin.getCurrentPlatformProfile();
 		const fragment = this.previewEl.innerHTML;
+		const imageResult = await this.buildClipboardImagePayload(profile);
 		return {
 			fragment,
 			html: wrapHtmlDocument(fragment),
+			image: imageResult.image,
+			imageCount: imageResult.imageCount,
 			text: this.previewEl.innerText || this.currentMarkdown,
 			unresolvedImages: this.currentUnresolvedImages
 		};
+	}
+
+	private async buildClipboardImagePayload(profile: PlatformProfile): Promise<{
+		image: ClipboardImagePayload | null;
+		imageCount: number;
+	}> {
+		const imageFiles = this.resolveEmbeddedImageFiles();
+		if (imageFiles.length === 0) {
+			return {
+				image: null,
+				imageCount: 0
+			};
+		}
+
+		if (profile.capabilities.requiresRemoteImageUrl) {
+			return {
+				image: null,
+				imageCount: imageFiles.length
+			};
+		}
+
+		try {
+			return {
+				image: await this.plugin.fileToClipboardImage(imageFiles[0]),
+				imageCount: imageFiles.length
+			};
+		} catch (error) {
+			console.error(`Unable to prepare clipboard image: ${imageFiles[0].path}`, error);
+			return {
+				image: null,
+				imageCount: imageFiles.length
+			};
+		}
 	}
 
 	private async buildPlatformFragment(): Promise<{
 		fragment: string;
 		unresolvedImages: number;
 	}> {
+		const profile = this.plugin.getCurrentPlatformProfile();
 		const clone = this.sourceEl.cloneNode(true) as HTMLElement;
 		clone.classList.remove("obsidian-to-publish-source", "markdown-rendered");
 
@@ -650,7 +718,9 @@ class WeChatPreviewCopyView extends ItemView {
 
 		applyPlatformProfile(clone, this.plugin.settings.targetPlatform);
 
-		const unresolvedImages = this.plugin.settings.embedLocalImages
+		const unresolvedImages = profile.capabilities.requiresRemoteImageUrl
+			? this.resolveEmbeddedImageFiles().length
+			: this.plugin.settings.embedLocalImages
 			? await this.embedLocalImages(clone)
 			: 0;
 
@@ -718,12 +788,14 @@ class WeChatPreviewCopyView extends ItemView {
 
 	private updateStatus(file: TFile, unresolvedImages: number) {
 		const profile = this.plugin.getCurrentPlatformProfile();
-		const imageWarning = profile.capabilities.requiresManualImageUpload
-			? " · images may need manual upload"
+		const imageWarning = profile.capabilities.requiresRemoteImageUrl && unresolvedImages > 0
+			? ` · ${unresolvedImages} 张本地图片需先上传为线上 URL`
+			: profile.capabilities.requiresManualImageUpload
+			? " · 图片可能需要手动上传"
 			: unresolvedImages === 0
 				? ""
-				: ` · ${unresolvedImages} image(s) not embedded`;
-		this.statusEl.setText(`${file.path} · Previewing ${getClipboardFormatLabel(profile)} for ${profile.copyLabel}${imageWarning}`);
+				: ` · ${unresolvedImages} 张图片未嵌入`;
+		this.statusEl.setText(`${file.path} · 正在预览${profile.copyLabel}的${getClipboardFormatLabel(profile)}${imageWarning}`);
 	}
 
 	private resolveEmbeddedImageFiles(): TFile[] {
@@ -806,8 +878,8 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName("Open preview automatically")
-			.setDesc("Open the right-sidebar preview when the plugin loads.")
+			.setName("自动打开预览")
+			.setDesc("插件加载时自动打开右侧发布预览。")
 			.addToggle((toggle) => toggle
 				.setValue(this.plugin.settings.autoOpen)
 				.onChange(async (value) => {
@@ -819,8 +891,8 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName("Copy profile")
-			.setDesc("Choose the target platform formatting profile.")
+			.setName("目标平台")
+			.setDesc("选择复制和预览时使用的平台格式。")
 			.addDropdown((dropdown) => {
 				for (const profile of PLATFORM_PROFILE_LIST) {
 					dropdown.addOption(profile.id, profile.label);
@@ -836,8 +908,8 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName("Embed local images")
-			.setDesc("Convert vault images to data URLs before copying.")
+			.setName("嵌入本地图片")
+			.setDesc("复制前将 vault 内图片转换为可粘贴的数据。")
 			.addToggle((toggle) => toggle
 				.setValue(this.plugin.settings.embedLocalImages)
 				.onChange(async (value) => {
@@ -847,8 +919,8 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName("Inline source styles")
-			.setDesc("Copy key computed styles before applying the target platform profile.")
+			.setName("内联源样式")
+			.setDesc("应用目标平台样式前，先保留当前预览中的关键计算样式。")
 			.addToggle((toggle) => toggle
 				.setValue(this.plugin.settings.inlineStyles)
 				.onChange(async (value) => {
@@ -1020,13 +1092,22 @@ function wrapHtmlDocument(fragment: string): string {
 	].join("");
 }
 
-async function writePlatformClipboard(profile: PlatformProfile, clipboard: ClipboardPayload, markdown: string) {
+async function writePlatformClipboard(
+	profile: PlatformProfile,
+	clipboard: ClipboardPayload,
+	markdown: string
+): Promise<boolean> {
+	const text = getTextClipboardContent(profile, markdown, clipboard.text);
+
 	if (profile.preferredFormat === "rich-html") {
-		await writeRichClipboard(clipboard.html, clipboard.fragment, clipboard.text);
-		return;
+		return writeRichClipboard(clipboard.html, clipboard.fragment, text, clipboard.image);
 	}
 
-	await writeTextClipboard(getTextClipboardContent(profile, markdown, clipboard.text));
+	if (profile.preferredFormat === "markdown" && profile.capabilities.supportsRichHtml && clipboard.image) {
+		return writeRichClipboard(clipboard.html, clipboard.fragment, text, clipboard.image);
+	}
+
+	return writeTextClipboard(text, clipboard.image);
 }
 
 function getTextClipboardContent(profile: PlatformProfile, markdown: string, text: string): string {
@@ -1037,12 +1118,12 @@ function getTextClipboardContent(profile: PlatformProfile, markdown: string, tex
 	return text.trim() ? text : markdown;
 }
 
-function getCopyNotice(profile: PlatformProfile, unresolvedImages: number): string {
-	return `Copied ${getClipboardFormatLabel(profile)} for ${profile.copyLabel}${getImageNoticeSuffix(profile, unresolvedImages)}.`;
+function getCopyNotice(profile: PlatformProfile, result: ClipboardPayload | CopyResult): string {
+	return `已复制${getClipboardFormatLabel(profile)}到${profile.copyLabel}${getImageNoticeSuffix(profile, result)}。`;
 }
 
-function getCopyAndOpenNotice(profile: PlatformProfile, unresolvedImages: number): string {
-	return `Copied ${getClipboardFormatLabel(profile)} for ${profile.copyLabel} and opened editor${getImageNoticeSuffix(profile, unresolvedImages)}.`;
+function getCopyAndOpenNotice(result: CopyResult): string {
+	return `已复制${getClipboardFormatLabel(result.profile)}到${result.profile.copyLabel}，并已打开编辑器${getImageNoticeSuffix(result.profile, result)}。`;
 }
 
 function getClipboardFormatLabel(profile: PlatformProfile): string {
@@ -1051,20 +1132,46 @@ function getClipboardFormatLabel(profile: PlatformProfile): string {
 	}
 
 	if (profile.preferredFormat === "plain-text") {
-		return "plain text";
+		return "纯文本";
 	}
 
-	return "rich HTML";
+	return "富文本";
 }
 
-function getImageNoticeSuffix(profile: PlatformProfile, unresolvedImages: number): string {
+function getImageNoticeSuffix(profile: PlatformProfile, result: ClipboardPayload | CopyResult): string {
+	const hasClipboardImage = "hasClipboardImage" in result
+		? result.hasClipboardImage
+		: result.image !== null;
+	const imageCount = result.imageCount;
+	const unresolvedImages = result.unresolvedImages;
+
+	if (profile.capabilities.requiresRemoteImageUrl) {
+		if (imageCount === 0) {
+			return "";
+		}
+
+		return `（${imageCount} 张本地图片不会被该平台识别，请先上传为线上 URL 后再复制）`;
+	}
+
 	if (profile.capabilities.requiresManualImageUpload) {
-		return " (images may need manual upload)";
+		if (imageCount > 1) {
+			return hasClipboardImage
+				? `（已尽量携带首张图片，其余 ${imageCount - 1} 张图片可能需要手动上传）`
+				: `（${imageCount} 张图片可能需要手动上传）`;
+		}
+
+		if (imageCount === 1) {
+			return hasClipboardImage
+				? "（已尽量携带首张图片，平台不支持时仍需手动上传）"
+				: "（图片可能需要手动上传）";
+		}
+
+		return "";
 	}
 
 	return unresolvedImages === 0
 		? ""
-		: ` (${unresolvedImages} image(s) could not be embedded)`;
+		: `（${unresolvedImages} 张图片未嵌入）`;
 }
 
 function isSafeEditorUrl(url: string): boolean {
@@ -1075,19 +1182,68 @@ function isSafeEditorUrl(url: string): boolean {
 	}
 }
 
-function openPlatformEditor(url: string): boolean {
+async function openPlatformEditor(url: string): Promise<boolean> {
 	if (!isSafeEditorUrl(url)) {
 		return false;
 	}
 
+	if (!Platform.isDesktopApp) {
+		return false;
+	}
+
+	if (Platform.isMacOS && await openUrlInChromeOnMac(url)) {
+		return true;
+	}
+
+	return openUrlWithElectronShell(url);
+}
+
+async function openUrlInChromeOnMac(url: string): Promise<boolean> {
+	const requireFn = getRuntimeRequire();
+	if (!requireFn) {
+		return false;
+	}
+
 	try {
-		const anchor = document.createElement("a");
-		anchor.href = url;
-		anchor.rel = "noopener noreferrer";
-		anchor.target = "_blank";
-		document.body.appendChild(anchor);
-		anchor.click();
-		anchor.remove();
+		const childProcess = requireFn("child_process") as {
+			execFile?: (
+				file: string,
+				args: string[],
+				callback: (error: Error | null) => void
+			) => void;
+		};
+		if (typeof childProcess.execFile !== "function") {
+			return false;
+		}
+
+		return await new Promise<boolean>((resolve) => {
+			childProcess.execFile?.("open", ["-a", "Google Chrome", url], (error) => {
+				resolve(!error);
+			});
+		});
+	} catch (error) {
+		console.error(`Unable to open Chrome for platform editor: ${url}`, error);
+		return false;
+	}
+}
+
+async function openUrlWithElectronShell(url: string): Promise<boolean> {
+	const requireFn = getRuntimeRequire();
+	if (!requireFn) {
+		return false;
+	}
+
+	try {
+		const electron = requireFn("electron") as {
+			shell?: {
+				openExternal?: (target: string) => Promise<void>;
+			};
+		};
+		if (typeof electron.shell?.openExternal !== "function") {
+			return false;
+		}
+
+		await electron.shell.openExternal(url);
 		return true;
 	} catch (error) {
 		console.error(`Unable to open platform editor: ${url}`, error);
@@ -1095,31 +1251,78 @@ function openPlatformEditor(url: string): boolean {
 	}
 }
 
-async function writeRichClipboard(html: string, fragment: string, text: string) {
+function getRuntimeRequire(): RuntimeRequire | null {
+	const windowWithRequire = window as Window & {
+		require?: RuntimeRequire;
+	};
+	if (typeof windowWithRequire.require === "function") {
+		return windowWithRequire.require;
+	}
+
+	const globalWithRequire = globalThis as typeof globalThis & {
+		require?: RuntimeRequire;
+	};
+	return typeof globalWithRequire.require === "function" ? globalWithRequire.require : null;
+}
+
+async function writeRichClipboard(
+	html: string,
+	fragment: string,
+	text: string,
+	image: ClipboardImagePayload | null
+): Promise<boolean> {
 	if (navigator.clipboard?.write && "ClipboardItem" in window) {
-		const item = new ClipboardItem({
+		const basePayload: Record<string, Blob> = {
 			"text/html": new Blob([html], { type: "text/html" }),
 			"text/plain": new Blob([text], { type: "text/plain" })
-		});
+		};
+
+		if (image) {
+			const itemPayload = {
+				...basePayload
+			};
+			itemPayload[image.mime] = image.blob;
+			try {
+				await navigator.clipboard.write([new ClipboardItem(itemPayload)]);
+				return true;
+			} catch (error) {
+				console.warn(`Unable to include clipboard image: ${image.file.path}`, error);
+			}
+		}
+
+		const item = new ClipboardItem(basePayload);
 		await navigator.clipboard.write([item]);
-		return;
+		return false;
 	}
 
 	if (copyHtmlWithSelection(fragment)) {
-		return;
+		return false;
 	}
 
-	await writeTextClipboard(text);
+	return writeTextClipboard(text, image);
 }
 
-async function writeTextClipboard(text: string) {
+async function writeTextClipboard(text: string, image: ClipboardImagePayload | null = null): Promise<boolean> {
+	if (image && navigator.clipboard?.write && "ClipboardItem" in window) {
+		try {
+			const item = new ClipboardItem({
+				"text/plain": new Blob([text], { type: "text/plain" }),
+				[image.mime]: image.blob
+			});
+			await navigator.clipboard.write([item]);
+			return true;
+		} catch (error) {
+			console.warn(`Unable to include clipboard image: ${image.file.path}`, error);
+		}
+	}
+
 	if (navigator.clipboard?.writeText) {
 		await navigator.clipboard.writeText(text);
-		return;
+		return false;
 	}
 
 	if (copyTextWithSelection(text)) {
-		return;
+		return false;
 	}
 
 	throw new Error("Clipboard text API is not available.");

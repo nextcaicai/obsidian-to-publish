@@ -33,9 +33,21 @@ describe("platform profiles", () => {
 	it("records markdown-first and text-first platforms explicitly", () => {
 		expect(PLATFORM_PROFILES.csdn.preferredFormat).toBe("markdown");
 		expect(PLATFORM_PROFILES.juejin.preferredFormat).toBe("markdown");
+		expect(PLATFORM_PROFILES.juejin.capabilities.supportsRichHtml).toBe(true);
 		expect(PLATFORM_PROFILES.x.preferredFormat).toBe("plain-text");
 		expect(PLATFORM_PROFILES.xiaohongshu.preferredFormat).toBe("plain-text");
 		expect(PLATFORM_PROFILES.zhihu.preferredFormat).toBe("rich-html");
+	});
+
+	it("marks platforms that require remote image URLs", () => {
+		expect(PLATFORM_PROFILES.zhihu.capabilities.requiresRemoteImageUrl).toBe(true);
+		expect(PLATFORM_PROFILES.juejin.capabilities.requiresRemoteImageUrl).toBe(true);
+		expect(PLATFORM_PROFILES.wechat.capabilities.requiresRemoteImageUrl).toBe(false);
+	});
+
+	it("uses the Chinese label for WeChat official account", () => {
+		expect(PLATFORM_PROFILES.wechat.label).toBe("微信公众号");
+		expect(PLATFORM_PROFILES.wechat.copyLabel).toBe("微信公众号");
 	});
 
 	it("accepts known platform ids and rejects unknown values", () => {

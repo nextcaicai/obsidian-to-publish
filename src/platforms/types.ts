@@ -19,6 +19,7 @@ export interface PlatformCapability {
 	supportsTags: boolean;
 	supportsDraftApi: boolean;
 	requiresManualImageUpload: boolean;
+	requiresRemoteImageUrl: boolean;
 }
 
 export interface PlatformProfile {

@@ -372,6 +372,7 @@ export interface ExportPayload {
 
 - `rich-html`、`markdown`、`plain-text` 已先接入现有剪贴板流程，尚未独立成 `src/rendering/export-payload.ts`。
 - 小红书当前复制纯文本正文，并通过通用图片提示提醒手动上传；标题/正文拆分留到资源包和导出 payload 阶段处理。
+- 知乎、掘金这类平台可以识别线上图片 URL，但无法稳定识别 Obsidian 本地图片、`data:` 图片或剪贴板图片 Blob；本地图片需要先上传成线上 URL 后再复制。
 - 真实平台粘贴验证仍需在开发 vault 中手动完成，尤其是知乎、CSDN、掘金的标题、代码块、表格和图片表现。
 
 ### Milestone E：API 草稿箱调研

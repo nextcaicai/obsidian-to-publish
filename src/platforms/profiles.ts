@@ -12,7 +12,8 @@ const RICH_HTML_CAPABILITIES: PlatformCapability = {
 	supportsCover: false,
 	supportsTags: false,
 	supportsDraftApi: false,
-	requiresManualImageUpload: false
+	requiresManualImageUpload: false,
+	requiresRemoteImageUrl: false
 };
 
 const MARKDOWN_CAPABILITIES: PlatformCapability = {
@@ -22,7 +23,8 @@ const MARKDOWN_CAPABILITIES: PlatformCapability = {
 	supportsCover: true,
 	supportsTags: true,
 	supportsDraftApi: false,
-	requiresManualImageUpload: true
+	requiresManualImageUpload: true,
+	requiresRemoteImageUrl: false
 };
 
 const PLAIN_TEXT_CAPABILITIES: PlatformCapability = {
@@ -32,7 +34,8 @@ const PLAIN_TEXT_CAPABILITIES: PlatformCapability = {
 	supportsCover: false,
 	supportsTags: false,
 	supportsDraftApi: false,
-	requiresManualImageUpload: true
+	requiresManualImageUpload: true,
+	requiresRemoteImageUrl: false
 };
 
 const DEFAULT_WRAPPER_STYLE = [
@@ -158,8 +161,8 @@ const PLAIN_TEXT_PREVIEW_RULES: PlatformStyleRule[] = [
 export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 	wechat: {
 		id: "wechat",
-		label: "WeChat Official Account",
-		copyLabel: "WeChat",
+		label: "微信公众号",
+		copyLabel: "微信公众号",
 		editorUrl: "https://mp.weixin.qq.com/",
 		preferredFormat: "rich-html",
 		capabilities: {
@@ -407,7 +410,8 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 			...RICH_HTML_CAPABILITIES,
 			supportsCover: true,
 			supportsTags: true,
-			requiresManualImageUpload: true
+			requiresManualImageUpload: true,
+			requiresRemoteImageUrl: true
 		},
 		wrapperStyle: DEFAULT_WRAPPER_STYLE,
 		rules: LONG_FORM_RULES,
@@ -430,7 +434,11 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 		copyLabel: "掘金",
 		editorUrl: "https://juejin.cn",
 		preferredFormat: "markdown",
-		capabilities: MARKDOWN_CAPABILITIES,
+		capabilities: {
+			...MARKDOWN_CAPABILITIES,
+			supportsRichHtml: true,
+			requiresRemoteImageUrl: true
+		},
 		wrapperStyle: DEFAULT_WRAPPER_STYLE,
 		rules: LONG_FORM_RULES,
 		transform: transformInternalLinksToPlainText
