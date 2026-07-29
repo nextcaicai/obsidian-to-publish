@@ -15,6 +15,9 @@ import {
 
 import {
 	extractMarkdownImageLinks,
+	extractRenderedImageAttachmentTarget,
+	extractStandaloneMarkdownImageAttachmentLinkTarget,
+	extractStandaloneMarkdownImageEmbedTarget,
 	normalizeImageLink
 } from "./rendering/image-links";
 import {
@@ -575,13 +578,13 @@ class WeChatPreviewCopyView extends ItemView {
 			return;
 		}
 
-		this.currentMarkdown = markdown;
+		this.currentMarkdown = this.removeRedundantImageAttachmentLinkLines(markdown);
 		this.renderComponent = new Component();
 		this.renderComponent.load();
 
 		await MarkdownRenderer.render(
 			this.app,
-			markdown,
+			this.currentMarkdown,
 			this.sourceEl,
 			file.path,
 			this.renderComponent
@@ -709,6 +712,7 @@ class WeChatPreviewCopyView extends ItemView {
 		unresolvedImages: number;
 	}> {
 		const profile = this.plugin.getCurrentPlatformProfile();
+		const embeddedImageFiles = this.resolveEmbeddedImageFiles();
 		const clone = this.sourceEl.cloneNode(true) as HTMLElement;
 		clone.classList.remove("obsidian-to-publish-source", "markdown-rendered");
 
@@ -716,16 +720,19 @@ class WeChatPreviewCopyView extends ItemView {
 			inlineComputedStyles(this.sourceEl, clone);
 		}
 
+		this.removeRenderedAttachmentOpenLinks(clone, embeddedImageFiles);
 		applyPlatformProfile(clone, this.plugin.settings.targetPlatform);
+		this.removeRenderedAttachmentOpenLinks(clone, embeddedImageFiles);
 
 		const unresolvedImages = profile.capabilities.requiresRemoteImageUrl
-			? this.resolveEmbeddedImageFiles().length
+			? embeddedImageFiles.length
 			: this.plugin.settings.embedLocalImages
 			? await this.embedLocalImages(clone)
 			: 0;
 
 		removeObsidianRuntimeControls(clone);
 		replaceTaskCheckboxes(clone);
+		this.removeRenderedAttachmentOpenLinks(clone, embeddedImageFiles);
 		removeObsidianRuntimeAttributes(clone);
 
 		return {
@@ -825,6 +832,74 @@ class WeChatPreviewCopyView extends ItemView {
 		}
 
 		return files;
+	}
+
+	private removeRedundantImageAttachmentLinkLines(markdown: string): string {
+		const lines = markdown.split(/\r?\n/);
+		const shouldRemove = new Set<number>();
+
+		for (let index = 0; index < lines.length; index += 1) {
+			const linkTarget = extractStandaloneMarkdownImageAttachmentLinkTarget(lines[index]);
+			if (!linkTarget) {
+				continue;
+			}
+
+			const linkFile = this.resolveLinkToImageFile(linkTarget);
+			if (!linkFile) {
+				continue;
+			}
+
+			const previousImageFile = this.resolveNeighboringMarkdownImageFile(lines, index, -1);
+			const nextImageFile = this.resolveNeighboringMarkdownImageFile(lines, index, 1);
+			if (
+				previousImageFile?.path === linkFile.path
+				|| nextImageFile?.path === linkFile.path
+			) {
+				shouldRemove.add(index);
+			}
+		}
+
+		if (shouldRemove.size === 0) {
+			return markdown;
+		}
+
+		return lines.filter((_, index) => !shouldRemove.has(index)).join("\n");
+	}
+
+	private resolveNeighboringMarkdownImageFile(lines: string[], index: number, direction: -1 | 1): TFile | null {
+		for (let offset = index + direction; offset >= 0 && offset < lines.length; offset += direction) {
+			if (!lines[offset].trim()) {
+				continue;
+			}
+
+			const imageTarget = extractStandaloneMarkdownImageEmbedTarget(lines[offset]);
+			return imageTarget ? this.resolveLinkToImageFile(imageTarget) : null;
+		}
+
+		return null;
+	}
+
+	private removeRenderedAttachmentOpenLinks(root: HTMLElement, embeddedImageFiles: TFile[]) {
+		const imageTargets = buildImageAttachmentTargetSet(embeddedImageFiles);
+
+		for (const link of Array.from(root.querySelectorAll<HTMLAnchorElement>("a"))) {
+			if (!isRenderedImageAttachmentText(link.textContent ?? "", imageTargets)) {
+				continue;
+			}
+
+			if (isInsideRenderedImageEmbed(link)) {
+				link.remove();
+				continue;
+			}
+
+			if (!isStandaloneRenderedAttachmentLink(link)) {
+				continue;
+			}
+
+			removeLinkOrSingleLinkContainer(link);
+		}
+
+		removeRenderedImageAttachmentTextNodes(root, imageTargets);
 	}
 
 	private resolveImageFromElement(image: HTMLImageElement | undefined): TFile | null {
@@ -1060,6 +1135,131 @@ function replaceTaskCheckboxes(root: HTMLElement) {
 		marker.setAttribute("style", "display:inline-block;width:1.3em;");
 		input.replaceWith(marker);
 	}
+}
+
+function buildImageAttachmentTargetSet(files: TFile[]): Set<string> {
+	const targets = new Set<string>();
+
+	for (const file of files) {
+		addImageAttachmentTarget(targets, file.path);
+		addImageAttachmentTarget(targets, file.name);
+		addImageAttachmentTarget(targets, getPathBasename(file.path));
+	}
+
+	return targets;
+}
+
+function addImageAttachmentTarget(targets: Set<string>, value: string) {
+	const normalized = normalizeImageAttachmentTarget(value);
+	if (normalized) {
+		targets.add(normalized);
+		targets.add(normalizeImageAttachmentTarget(getPathBasename(normalized)));
+	}
+}
+
+function normalizeImageAttachmentTarget(value: string): string {
+	return normalizeImageLink(value).replace(/\\/g, "/").trim().toLowerCase();
+}
+
+function getPathBasename(path: string): string {
+	const normalizedPath = path.replace(/\\/g, "/");
+	return normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1);
+}
+
+function isRenderedImageAttachmentText(text: string, imageTargets: Set<string>): boolean {
+	const target = extractRenderedImageAttachmentTarget(text);
+	if (!target) {
+		return false;
+	}
+
+	const normalizedTarget = normalizeImageAttachmentTarget(target);
+	return (
+		imageTargets.has(normalizedTarget)
+		|| imageTargets.has(normalizeImageAttachmentTarget(getPathBasename(normalizedTarget)))
+	);
+}
+
+function removeRenderedImageAttachmentTextNodes(root: HTMLElement, imageTargets: Set<string>) {
+	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+	const removableTextNodes: Text[] = [];
+
+	while (walker.nextNode()) {
+		const node = walker.currentNode;
+		if (node instanceof Text && isRenderedImageAttachmentText(node.textContent ?? "", imageTargets)) {
+			removableTextNodes.push(node);
+		}
+	}
+
+	for (const textNode of removableTextNodes) {
+		const parent = textNode.parentElement;
+		if (!parent || parent.closest("a")) {
+			continue;
+		}
+
+		if (isInsideRenderedImageEmbed(parent)) {
+			textNode.remove();
+			continue;
+		}
+
+		const container = findStandaloneTextContainer(parent);
+		if (container) {
+			container.remove();
+		}
+	}
+}
+
+function findStandaloneTextContainer(element: HTMLElement): HTMLElement | null {
+	let current: HTMLElement | null = element;
+
+	while (current && current.parentElement) {
+		if (current.matches("p,div,span")) {
+			const text = current.textContent?.trim() ?? "";
+			if (text && !current.querySelector("img") && current.children.length <= 1) {
+				return current;
+			}
+		}
+
+		if (current.matches("section,article,body")) {
+			return null;
+		}
+
+		current = current.parentElement;
+	}
+
+	return null;
+}
+
+function removeLinkOrSingleLinkContainer(link: HTMLAnchorElement) {
+	const parent = link.parentElement;
+	if (
+		parent
+		&& parent.matches("p,div")
+		&& parent.textContent?.trim() === link.textContent?.trim()
+		&& !parent.querySelector("img")
+	) {
+		parent.remove();
+		return;
+	}
+
+	link.remove();
+}
+
+function isInsideRenderedImageEmbed(element: Element): boolean {
+	const embed = element.closest(".image-embed,.media-embed,.internal-embed");
+	return Boolean(embed?.querySelector("img"));
+}
+
+function isStandaloneRenderedAttachmentLink(link: HTMLAnchorElement): boolean {
+	const parent = link.parentElement;
+	if (!parent) {
+		return false;
+	}
+
+	return (
+		parent.matches("p,div")
+		&& parent.textContent?.trim() === link.textContent?.trim()
+		&& !parent.querySelector("img")
+	);
 }
 
 function removeObsidianRuntimeAttributes(root: HTMLElement) {
