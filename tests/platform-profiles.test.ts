@@ -34,9 +34,16 @@ describe("platform profiles", () => {
 		expect(PLATFORM_PROFILES.csdn.preferredFormat).toBe("markdown");
 		expect(PLATFORM_PROFILES.juejin.preferredFormat).toBe("markdown");
 		expect(PLATFORM_PROFILES.juejin.capabilities.supportsRichHtml).toBe(true);
-		expect(PLATFORM_PROFILES.x.preferredFormat).toBe("plain-text");
+		expect(PLATFORM_PROFILES.x.preferredFormat).toBe("markdown");
 		expect(PLATFORM_PROFILES.xiaohongshu.preferredFormat).toBe("plain-text");
 		expect(PLATFORM_PROFILES.zhihu.preferredFormat).toBe("rich-html");
+	});
+
+	it("opens the X Articles editor with a markdown-first profile", () => {
+		expect(PLATFORM_PROFILES.x.label).toBe("X Articles");
+		expect(PLATFORM_PROFILES.x.copyLabel).toBe("X Articles");
+		expect(PLATFORM_PROFILES.x.editorUrl).toBe("https://x.com/compose/articles");
+		expect(PLATFORM_PROFILES.x.capabilities.supportsMarkdown).toBe(true);
 	});
 
 	it("marks platforms that require remote image URLs", () => {

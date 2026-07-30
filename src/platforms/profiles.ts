@@ -460,13 +460,13 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 	},
 	x: {
 		id: "x",
-		label: "X / Twitter",
-		copyLabel: "X / Twitter",
-		editorUrl: "https://x.com/compose/post",
-		preferredFormat: "plain-text",
-		capabilities: PLAIN_TEXT_CAPABILITIES,
+		label: "X Articles",
+		copyLabel: "X Articles",
+		editorUrl: "https://x.com/compose/articles",
+		preferredFormat: "markdown",
+		capabilities: MARKDOWN_CAPABILITIES,
 		wrapperStyle: DEFAULT_WRAPPER_STYLE,
-		rules: PLAIN_TEXT_PREVIEW_RULES,
+		rules: LONG_FORM_RULES,
 		transform: transformInternalLinksToPlainText
 	},
 	xiaohongshu: {
