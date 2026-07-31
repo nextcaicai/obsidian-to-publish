@@ -57,6 +57,27 @@ describe("platform profiles", () => {
 		expect(PLATFORM_PROFILES.wechat.copyLabel).toBe("微信公众号");
 	});
 
+	it("keeps bold text at the normal body size for Zhishixingqiu", () => {
+		const strongRule = PLATFORM_PROFILES.zhishixingqiu.rules.find(
+			(rule) => rule.selector === "strong"
+		);
+
+		expect(strongRule?.style).toContain("font-size:16px");
+		expect(strongRule?.style).toContain("font-weight:700");
+	});
+
+	it("keeps ordered list text at the normal body size for Zhishixingqiu", () => {
+		const listRule = PLATFORM_PROFILES.zhishixingqiu.rules.find(
+			(rule) => rule.selector === "ul,ol"
+		);
+		const listItemRule = PLATFORM_PROFILES.zhishixingqiu.rules.find(
+			(rule) => rule.selector === "li"
+		);
+
+		expect(listRule?.style).toContain("font-size:16px");
+		expect(listItemRule?.style).toContain("font-size:16px");
+	});
+
 	it("accepts known platform ids and rejects unknown values", () => {
 		expect(isCopyPlatform("wechat")).toBe(true);
 		expect(isCopyPlatform("bilibili")).toBe(true);

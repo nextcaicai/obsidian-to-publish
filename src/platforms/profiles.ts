@@ -323,7 +323,7 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 			},
 			{
 				selector: "strong",
-				style: "color:#1d2129;font-weight:700;"
+				style: "color:#1d2129;font-size:16px;font-weight:700;"
 			},
 			{
 				selector: "em",
@@ -335,11 +335,11 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 			},
 			{
 				selector: "ul,ol",
-				style: "margin:0;padding-left:1.4em;"
+				style: "font-size:16px;margin:0;padding-left:1.4em;"
 			},
 			{
 				selector: "li",
-				style: "color:#2f3033;line-height:1.8;margin:0.2em 0;"
+				style: "color:#2f3033;font-size:16px;line-height:1.8;margin:0.2em 0;"
 			},
 			{
 				selector: "blockquote",

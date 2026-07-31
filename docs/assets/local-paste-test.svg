@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+	<title id="title">Local paste test image</title>
+	<desc id="desc">A local SVG image used to verify whether publishing platforms can consume Obsidian local images.</desc>
+	<rect width="960" height="540" fill="#f5f7fb"/>
+	<rect x="56" y="56" width="848" height="428" rx="24" fill="#ffffff" stroke="#d8dee8" stroke-width="3"/>
+	<circle cx="160" cy="170" r="54" fill="#2f6fec"/>
+	<rect x="252" y="136" width="512" height="28" rx="14" fill="#24324b"/>
+	<rect x="252" y="190" width="392" height="22" rx="11" fill="#6b7280"/>
+	<rect x="120" y="300" width="720" height="56" rx="12" fill="#e8f0ff"/>
+	<rect x="120" y="384" width="420" height="32" rx="16" fill="#c7d2fe"/>
+	<text x="480" y="462" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" fill="#24324b">Obsidian local image test</text>
+</svg>
