@@ -331,7 +331,7 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 			},
 			{
 				selector: "a",
-				style: "color:#246bfe;text-decoration:none;"
+				style: "color:#246bfe;font-size:16px;text-decoration:none;"
 			},
 			{
 				selector: "ul,ol",

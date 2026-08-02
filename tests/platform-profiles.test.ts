@@ -78,6 +78,15 @@ describe("platform profiles", () => {
 		expect(listItemRule?.style).toContain("font-size:16px");
 	});
 
+	it("keeps link text at the normal body size for Zhishixingqiu", () => {
+		const linkRule = PLATFORM_PROFILES.zhishixingqiu.rules.find(
+			(rule) => rule.selector === "a"
+		);
+
+		expect(linkRule?.style).toContain("font-size:16px");
+		expect(linkRule?.style).toContain("text-decoration:none");
+	});
+
 	it("accepts known platform ids and rejects unknown values", () => {
 		expect(isCopyPlatform("wechat")).toBe(true);
 		expect(isCopyPlatform("bilibili")).toBe(true);
