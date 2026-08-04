@@ -1,0 +1,50 @@
+{
+	"manifest_version": 3,
+	"name": "Obsidian to Publish Companion",
+	"version": "0.1.0",
+	"description": "Receives Obsidian to Publish draft packages and helps import them into browser editors.",
+	"permissions": [
+		"storage",
+		"tabs"
+	],
+	"host_permissions": [
+		"ws://127.0.0.1:*/*",
+		"https://x.com/*",
+		"https://twitter.com/*",
+		"https://editor.csdn.net/*",
+		"https://juejin.cn/*",
+		"https://www.zhihu.com/*",
+		"https://substack.com/*",
+		"https://creator.xiaohongshu.com/*",
+		"https://member.bilibili.com/*",
+		"https://wx.zsxq.com/*"
+	],
+	"background": {
+		"service_worker": "src/background.js",
+		"type": "module"
+	},
+	"content_scripts": [
+		{
+			"matches": [
+				"https://x.com/*",
+				"https://twitter.com/*",
+				"https://editor.csdn.net/*",
+				"https://juejin.cn/*",
+				"https://www.zhihu.com/*",
+				"https://substack.com/*",
+				"https://creator.xiaohongshu.com/*",
+				"https://member.bilibili.com/*",
+				"https://wx.zsxq.com/*"
+			],
+			"js": [
+				"src/content.js"
+			],
+			"run_at": "document_idle",
+			"all_frames": false
+		}
+	],
+	"options_page": "options.html",
+	"action": {
+		"default_title": "Obsidian to Publish Companion"
+	}
+}

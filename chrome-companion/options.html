@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8">
+		<title>Obsidian to Publish Companion</title>
+		<style>
+			body {
+				box-sizing: border-box;
+				color: #111827;
+				font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+				margin: 0;
+				max-width: 720px;
+				padding: 24px;
+			}
+
+			h1 {
+				font-size: 20px;
+				margin: 0 0 16px;
+			}
+
+			label {
+				display: block;
+				font-weight: 600;
+				margin: 16px 0 6px;
+			}
+
+			input {
+				border: 1px solid #cbd5e1;
+				border-radius: 6px;
+				box-sizing: border-box;
+				font: inherit;
+				padding: 8px 10px;
+				width: 100%;
+			}
+
+			button {
+				background: #111827;
+				border: 0;
+				border-radius: 6px;
+				color: #fff;
+				cursor: pointer;
+				font: inherit;
+				margin-right: 8px;
+				margin-top: 16px;
+				padding: 8px 12px;
+			}
+
+			.secondary {
+				background: #f1f5f9;
+				color: #111827;
+			}
+
+			.status {
+				color: #475569;
+				margin-top: 16px;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Obsidian to Publish Companion</h1>
+
+		<label for="port">本地端口</label>
+		<input id="port" inputmode="numeric" placeholder="27127">
+
+		<label for="token">连接令牌</label>
+		<input id="token" type="password" autocomplete="off" placeholder="从 Obsidian 插件设置复制">
+
+		<button id="save" type="button">保存并连接</button>
+		<button id="show-token" class="secondary" type="button">显示/隐藏令牌</button>
+		<button id="status" class="secondary" type="button">刷新状态</button>
+
+		<div id="message" class="status"></div>
+
+		<script src="src/options.js"></script>
+	</body>
+</html>

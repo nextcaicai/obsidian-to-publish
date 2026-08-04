@@ -27,17 +27,30 @@ import {
 	PLATFORM_PROFILES,
 	wrapPlatformFragment
 } from "./platforms/profiles";
+import {
+	createChromeCompanionBridgeService,
+	DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS,
+	generateChromeCompanionToken
+} from "./publishing/chrome-bridge";
 import { buildPublishPackageV1 } from "./publishing/package";
 import type {
 	CopyPlatform,
 	PlatformProfile
 } from "./platforms/types";
-import type { ResolvedPublishImage } from "./publishing/types";
+import type {
+	ChromeCompanionBridgeService,
+	ChromeCompanionBridgeSettings
+} from "./publishing/chrome-bridge";
+import type {
+	PublishPackageV1,
+	ResolvedPublishImage
+} from "./publishing/types";
 
 const VIEW_TYPE_WECHAT_PREVIEW = "obsidian-to-publish-view";
 
 interface WeChatPreviewCopySettings {
 	autoOpen: boolean;
+	chromeCompanionBridge: ChromeCompanionBridgeSettings;
 	embedLocalImages: boolean;
 	inlineStyles: boolean;
 	targetPlatform: CopyPlatform;
@@ -69,6 +82,7 @@ type RuntimeRequire = (moduleName: string) => unknown;
 
 const DEFAULT_SETTINGS: WeChatPreviewCopySettings = {
 	autoOpen: true,
+	chromeCompanionBridge: DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS,
 	embedLocalImages: true,
 	inlineStyles: true,
 	targetPlatform: "wechat"
@@ -153,17 +167,28 @@ const OBSIDIAN_CODE_COPY_CONTROL_SELECTORS = [
 
 export default class WeChatPreviewCopyPlugin extends Plugin {
 	settings: WeChatPreviewCopySettings = DEFAULT_SETTINGS;
+	private chromeCompanionBridge: ChromeCompanionBridgeService | null = null;
 	private lastMarkdownFile: TFile | null = null;
 	private refreshTimer: number | null = null;
 
 	async onload() {
 		const loadedSettings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const chromeCompanionBridge = normalizeChromeCompanionBridgeSettings(loadedSettings.chromeCompanionBridge);
+		let shouldSaveNormalizedSettings = false;
+		if (!chromeCompanionBridge.token) {
+			chromeCompanionBridge.token = generateChromeCompanionToken();
+			shouldSaveNormalizedSettings = true;
+		}
 		this.settings = {
 			...loadedSettings,
+			chromeCompanionBridge,
 			targetPlatform: isCopyPlatform(loadedSettings.targetPlatform)
 				? loadedSettings.targetPlatform
 				: DEFAULT_SETTINGS.targetPlatform
 		};
+		if (shouldSaveNormalizedSettings) {
+			await this.saveSettings();
+		}
 		this.rememberActiveMarkdownFile();
 
 		this.registerView(
@@ -208,6 +233,30 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "send-current-note-to-chrome-companion",
+			name: "发送当前笔记到 Chrome 插件",
+			callback: () => {
+				void this.sendCurrentNoteToChromeCompanion();
+			}
+		});
+
+		this.addCommand({
+			id: "start-chrome-companion-bridge",
+			name: "启动 Chrome 插件连接",
+			callback: () => {
+				void this.startChromeCompanionBridge();
+			}
+		});
+
+		this.addCommand({
+			id: "stop-chrome-companion-bridge",
+			name: "停止 Chrome 插件连接",
+			callback: () => {
+				void this.stopChromeCompanionBridge();
+			}
+		});
+
+		this.addCommand({
 			id: "copy-current-note-for-wechat",
 			name: "复制当前笔记到微信公众号",
 			callback: () => {
@@ -246,6 +295,10 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		this.registerEditorChangeEvent();
 
 		this.app.workspace.onLayoutReady(() => {
+			if (this.settings.chromeCompanionBridge.enabled) {
+				void this.startChromeCompanionBridge(false);
+			}
+
 			if (this.settings.autoOpen) {
 				void this.activateView(false);
 			}
@@ -256,6 +309,7 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		if (this.refreshTimer !== null) {
 			window.clearTimeout(this.refreshTimer);
 		}
+		void this.stopChromeCompanionBridge(false);
 		this.app.workspace.detachLeavesOfType(VIEW_TYPE_WECHAT_PREVIEW);
 	}
 
@@ -297,6 +351,41 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		if (leaf.view instanceof WeChatPreviewCopyView) {
 			await leaf.view.renderActiveFile();
 			await leaf.view.copyPublishPackageJson();
+		}
+	}
+
+	async sendCurrentNoteToChromeCompanion() {
+		if (!await this.startChromeCompanionBridge(false)) {
+			return;
+		}
+
+		const leaf = await this.getOrCreatePreviewLeaf();
+		this.app.workspace.revealLeaf(leaf);
+
+		if (!(leaf.view instanceof WeChatPreviewCopyView)) {
+			new Notice("发布预览未就绪。");
+			return;
+		}
+
+		await leaf.view.renderActiveFile();
+
+		try {
+			const publishPackage = await leaf.view.buildPublishPackage();
+			const profile = this.getCurrentPlatformProfile();
+			const result = await this.getChromeCompanionBridgeService().request("article.importDraft", {
+				package: publishPackage
+			}, { timeoutMs: 15000 });
+			const accepted = isRecord(result) && result.accepted === true;
+			if (accepted) {
+				new Notice(`已发送到 Chrome 插件：${profile.copyLabel}。`);
+			} else {
+				new Notice("Chrome 插件已响应，但未确认导入，请查看 Chrome 扩展日志。");
+			}
+		} catch (error) {
+			console.error(error);
+			const status = this.getChromeCompanionBridgeStatus();
+			const hint = status.hasClient ? "请查看控制台。" : "请确认 Chrome companion 已加载并填入令牌。";
+			new Notice(`发送到 Chrome 插件失败，${hint}`);
 		}
 	}
 
@@ -399,6 +488,94 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	async startChromeCompanionBridge(notify = true): Promise<boolean> {
+		if (!Platform.isDesktopApp) {
+			if (notify) {
+				new Notice("Chrome 插件连接仅支持 Obsidian 桌面端。");
+			}
+			return false;
+		}
+
+		const requireFn = getRuntimeRequire();
+		if (!requireFn) {
+			if (notify) {
+				new Notice("当前环境无法启动本地连接。");
+			}
+			return false;
+		}
+
+		try {
+			await this.getChromeCompanionBridgeService(requireFn).start();
+			if (notify) {
+				const status = this.getChromeCompanionBridgeStatus();
+				new Notice(`Chrome 插件连接已启动：127.0.0.1:${status.port}。`);
+			}
+			return true;
+		} catch (error) {
+			console.error(error);
+			if (notify) {
+				new Notice("Chrome 插件连接启动失败，请检查端口是否被占用。");
+			}
+			return false;
+		}
+	}
+
+	async stopChromeCompanionBridge(notify = true): Promise<void> {
+		if (!this.chromeCompanionBridge) {
+			return;
+		}
+
+		try {
+			await this.chromeCompanionBridge.stop();
+			this.chromeCompanionBridge = null;
+			if (notify) {
+				new Notice("Chrome 插件连接已停止。");
+			}
+		} catch (error) {
+			console.error(error);
+			if (notify) {
+				new Notice("停止 Chrome 插件连接失败，请查看控制台。");
+			}
+		}
+	}
+
+	async restartChromeCompanionBridgeIfEnabled(): Promise<void> {
+		if (!this.settings.chromeCompanionBridge.enabled) {
+			return;
+		}
+
+		await this.stopChromeCompanionBridge(false);
+		await this.startChromeCompanionBridge(false);
+	}
+
+	getChromeCompanionBridgeStatus() {
+		return this.chromeCompanionBridge?.getStatus() ?? {
+			running: false,
+			port: this.settings.chromeCompanionBridge.port,
+			hasClient: false,
+			clientLabel: "",
+			clientVersion: "",
+			lastSeenAt: null
+		};
+	}
+
+	private getChromeCompanionBridgeService(requireFn: RuntimeRequire | null = getRuntimeRequire()): ChromeCompanionBridgeService {
+		if (!requireFn) {
+			throw new Error("Runtime require is not available.");
+		}
+
+		if (!this.chromeCompanionBridge) {
+			this.chromeCompanionBridge = createChromeCompanionBridgeService({
+				...this.settings.chromeCompanionBridge,
+				requireFn,
+				pluginVersion: this.manifest.version,
+				supportedPlatforms: getSupportedChromeCompanionPlatforms()
+			});
+		}
+
+		return this.chromeCompanionBridge;
 	}
 
 	private getFocusedMarkdownFile(): TFile | null {
@@ -702,29 +879,36 @@ class WeChatPreviewCopyView extends ItemView {
 		}
 
 		try {
-			const clipboard = await this.buildClipboardPayload();
-			const publishPackage = await buildPublishPackageV1({
-				targets: [this.plugin.settings.targetPlatform],
-				note: {
-					path: this.currentFile.path,
-					basename: this.currentFile.basename,
-					mtime: this.currentFile.stat.mtime
-				},
-				markdown: this.currentMarkdown,
-				html: clipboard.html,
-				text: clipboard.text,
-				resolveImage: async (src) => {
-					const file = this.resolveLinkToImageFile(src);
-					return file ? this.plugin.fileToResolvedPublishImage(file) : null;
-				}
-			});
-
+			const publishPackage = await this.buildPublishPackage();
 			await writeTextClipboard(JSON.stringify(publishPackage, null, "\t"));
 			new Notice(`已复制发布包 JSON（${publishPackage.assets.length} 个资源，${publishPackage.warnings.length} 条提示）。`);
 		} catch (error) {
 			console.error(error);
 			new Notice("复制发布包 JSON 失败，请查看控制台。");
 		}
+	}
+
+	async buildPublishPackage(): Promise<PublishPackageV1> {
+		if (!this.currentFile) {
+			throw new Error("No active Markdown file.");
+		}
+
+		const clipboard = await this.buildClipboardPayload();
+		return buildPublishPackageV1({
+			targets: [this.plugin.settings.targetPlatform],
+			note: {
+				path: this.currentFile.path,
+				basename: this.currentFile.basename,
+				mtime: this.currentFile.stat.mtime
+			},
+			markdown: this.currentMarkdown,
+			html: clipboard.html,
+			text: clipboard.text,
+			resolveImage: async (src) => {
+				const file = this.resolveLinkToImageFile(src);
+				return file ? this.plugin.fileToResolvedPublishImage(file) : null;
+			}
+		});
 	}
 
 	private async buildClipboardPayload(): Promise<ClipboardPayload> {
@@ -1070,7 +1254,124 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 					await this.plugin.refreshPreviewViews();
 				}));
+
+		containerEl.createEl("h3", { text: "Chrome 插件连接" });
+		const bridgeStatus = this.plugin.getChromeCompanionBridgeStatus();
+
+		new Setting(containerEl)
+			.setName("启用本地连接")
+			.setDesc("在 Obsidian 桌面端监听 127.0.0.1，供 Chrome companion 接收发布包。")
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.chromeCompanionBridge.enabled)
+				.onChange(async (value) => {
+					this.plugin.settings.chromeCompanionBridge.enabled = value;
+					await this.plugin.saveSettings();
+					if (value) {
+						const started = await this.plugin.startChromeCompanionBridge();
+						if (!started) {
+							this.plugin.settings.chromeCompanionBridge.enabled = false;
+							await this.plugin.saveSettings();
+						}
+					} else {
+						await this.plugin.stopChromeCompanionBridge();
+					}
+					this.display();
+				}));
+
+		new Setting(containerEl)
+			.setName("本地端口")
+			.setDesc("Chrome 插件将连接 ws://127.0.0.1:<port>/bridge。修改端口后会重启连接。")
+			.addText((text) => text
+				.setPlaceholder(String(DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS.port))
+				.setValue(String(this.plugin.settings.chromeCompanionBridge.port))
+				.onChange(async (value) => {
+					const port = Number(value);
+					if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+						return;
+					}
+					this.plugin.settings.chromeCompanionBridge.port = port;
+					await this.plugin.saveSettings();
+					await this.plugin.restartChromeCompanionBridgeIfEnabled();
+				}));
+
+		new Setting(containerEl)
+			.setName("连接令牌")
+			.setDesc("复制到 Chrome companion 设置页。不要公开分享这个令牌。")
+			.addText((text) => {
+				text
+					.setValue(this.plugin.settings.chromeCompanionBridge.token)
+					.setDisabled(true);
+				text.inputEl.type = "password";
+			})
+			.addButton((button) => button
+				.setButtonText("复制令牌")
+				.onClick(async () => {
+					await writeTextClipboard(this.plugin.settings.chromeCompanionBridge.token);
+					new Notice("已复制 Chrome companion 连接令牌。");
+				}))
+			.addButton((button) => button
+				.setButtonText("重置")
+				.onClick(async () => {
+					this.plugin.settings.chromeCompanionBridge.token = generateChromeCompanionToken();
+					await this.plugin.saveSettings();
+					await this.plugin.restartChromeCompanionBridgeIfEnabled();
+					new Notice("已重置 Chrome companion 连接令牌。");
+					this.display();
+				}));
+
+		new Setting(containerEl)
+			.setName("连接状态")
+			.setDesc(getChromeCompanionStatusLabel(bridgeStatus))
+			.addButton((button) => button
+				.setButtonText("刷新")
+				.onClick(() => {
+					this.display();
+				}));
 	}
+}
+
+function normalizeChromeCompanionBridgeSettings(value: unknown): ChromeCompanionBridgeSettings {
+	const raw = isRecord(value) ? value : {};
+	const port = typeof raw.port === "number" && Number.isInteger(raw.port) && raw.port >= 1024 && raw.port <= 65535
+		? raw.port
+		: DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS.port;
+	const token = typeof raw.token === "string"
+		? raw.token.trim()
+		: DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS.token;
+
+	return {
+		enabled: typeof raw.enabled === "boolean"
+			? raw.enabled
+			: DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS.enabled,
+		port,
+		token
+	};
+}
+
+function getSupportedChromeCompanionPlatforms() {
+	return PLATFORM_PROFILE_LIST.map((profile) => ({
+		id: profile.id,
+		label: profile.label,
+		editorUrl: profile.editorUrl
+	}));
+}
+
+function getChromeCompanionStatusLabel(status: ReturnType<WeChatPreviewCopyPlugin["getChromeCompanionBridgeStatus"]>): string {
+	if (!status.running) {
+		return `未启动，端口 ${status.port}。`;
+	}
+
+	if (!status.hasClient) {
+		return `已启动 127.0.0.1:${status.port}，等待 Chrome companion 连接。`;
+	}
+
+	const client = status.clientLabel || "Chrome companion";
+	const version = status.clientVersion ? ` ${status.clientVersion}` : "";
+	return `已连接 ${client}${version}，端口 ${status.port}。`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isImageFile(file: TFile): boolean {
