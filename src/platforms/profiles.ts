@@ -367,7 +367,7 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 			},
 			{
 				selector: "th,td",
-				style: "border:1px solid #d8dee4;color:#2f3033;font-size:15px;line-height:1.6;padding:8px 10px;text-align:left;vertical-align:top;"
+				style: "border:1px solid #d8dee4;color:#2f3033;font-size:16px;line-height:1.6;padding:8px 10px;text-align:left;vertical-align:top;"
 			},
 			{
 				selector: "th",
@@ -549,11 +549,165 @@ function transformZhishixingqiuArticle(root: HTMLElement) {
 		appendInlineStyle(link, "color:#2f3033;text-decoration:none;");
 	}
 
+	replaceZhishixingqiuTables(root);
+
 	for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>("p:empty"))) {
 		turnIntoZhishixingqiuSpacer(paragraph);
 	}
 
 	insertZhishixingqiuSpacers(root);
+}
+
+export interface ZhishixingqiuTableLine {
+	label?: string;
+	value: string;
+}
+
+export function buildZhishixingqiuTableRows(
+	headers: string[],
+	rows: string[][]
+): ZhishixingqiuTableLine[][] {
+	const normalizedHeaders = headers.map(normalizeTableCellText);
+	const normalizedRows = rows
+		.map((row) => row.map(normalizeTableCellText))
+		.filter((row) => row.some((cell) => cell.length > 0));
+
+	if (normalizedHeaders.length === 0) {
+		return normalizedRows.map((row) => [
+			{
+				value: row.filter((cell) => cell.length > 0).join(" ｜ ")
+			}
+		]);
+	}
+
+	return normalizedRows.map((row) =>
+		Array.from({ length: Math.max(normalizedHeaders.length, row.length) }, (_, index) => ({
+			label: normalizedHeaders[index] || `第 ${index + 1} 列`,
+			value: row[index] ?? ""
+		}))
+	);
+}
+
+function replaceZhishixingqiuTables(root: HTMLElement) {
+	for (const table of Array.from(root.querySelectorAll<HTMLTableElement>("table"))) {
+		const headerCells = getZhishixingqiuTableHeaderCells(table);
+		const bodyRows = getZhishixingqiuTableBodyRows(table, headerCells.sourceRow);
+		const renderedRows = buildZhishixingqiuTableRows(
+			headerCells.labels,
+			bodyRows.map((row) => Array.from(row.cells).map((cell) => cell.textContent ?? ""))
+		);
+
+		if (renderedRows.length === 0) {
+			table.remove();
+			continue;
+		}
+
+		const replacement = document.createElement("div");
+		replacement.classList.add("zhishixingqiu-table");
+		replacement.setAttribute("style", [
+			"border:1px solid #d8dee4",
+			"border-radius:6px",
+			"box-sizing:border-box",
+			"font-size:16px",
+			"line-height:1.7",
+			"margin:0",
+			"overflow:hidden"
+		].join(";"));
+
+		for (let rowIndex = 0; rowIndex < renderedRows.length; rowIndex += 1) {
+			const sourceRow = bodyRows[rowIndex];
+			const row = renderedRows[rowIndex];
+			const rowElement = document.createElement("div");
+			rowElement.classList.add("zhishixingqiu-table-row");
+			rowElement.setAttribute("style", [
+				rowIndex === 0 ? "" : "border-top:1px solid #e5e6eb",
+				"box-sizing:border-box",
+				"padding:8px 10px"
+			].filter(Boolean).join(";"));
+
+			for (let cellIndex = 0; cellIndex < row.length; cellIndex += 1) {
+				const line = row[cellIndex];
+				const sourceCell = sourceRow?.cells.item(cellIndex) ?? null;
+				rowElement.append(createZhishixingqiuTableLine(line, sourceCell));
+			}
+
+			replacement.append(rowElement);
+		}
+
+		table.replaceWith(replacement);
+	}
+}
+
+function getZhishixingqiuTableHeaderCells(table: HTMLTableElement): {
+	labels: string[];
+	sourceRow: HTMLTableRowElement | null;
+} {
+	const headRow = table.tHead?.rows.item(0) ?? null;
+	if (headRow) {
+		return {
+			labels: Array.from(headRow.cells).map((cell) => cell.textContent ?? ""),
+			sourceRow: headRow
+		};
+	}
+
+	const firstRow = table.rows.item(0);
+	if (!firstRow || !Array.from(firstRow.cells).some((cell) => cell.tagName.toLowerCase() === "th")) {
+		return {
+			labels: [],
+			sourceRow: null
+		};
+	}
+
+	return {
+		labels: Array.from(firstRow.cells).map((cell) => cell.textContent ?? ""),
+		sourceRow: firstRow
+	};
+}
+
+function getZhishixingqiuTableBodyRows(
+	table: HTMLTableElement,
+	headerRow: HTMLTableRowElement | null
+): HTMLTableRowElement[] {
+	const bodyRows = Array.from(table.tBodies).flatMap((body) => Array.from(body.rows));
+	if (bodyRows.length > 0) {
+		return bodyRows;
+	}
+
+	return Array.from(table.rows).filter((row) => row !== headerRow);
+}
+
+function createZhishixingqiuTableLine(
+	line: ZhishixingqiuTableLine,
+	sourceCell: HTMLTableCellElement | null
+): HTMLParagraphElement {
+	const paragraph = document.createElement("p");
+	paragraph.setAttribute("style", [
+		"color:#2f3033",
+		"font-size:16px",
+		"line-height:1.7",
+		"margin:0.2em 0"
+	].join(";"));
+
+	if (line.label) {
+		const label = document.createElement("strong");
+		label.textContent = line.label;
+		label.setAttribute("style", "color:#1d2129;font-size:16px;font-weight:700;");
+		paragraph.append(label, "：");
+	}
+
+	if (sourceCell && sourceCell.childNodes.length > 0) {
+		for (const child of Array.from(sourceCell.childNodes)) {
+			paragraph.append(child.cloneNode(true));
+		}
+	} else {
+		paragraph.append(line.value);
+	}
+
+	return paragraph;
+}
+
+function normalizeTableCellText(value: string): string {
+	return value.replace(/\s+/g, " ").trim();
 }
 
 function transformInternalLinksToPlainText(root: HTMLElement) {

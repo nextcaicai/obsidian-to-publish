@@ -27,10 +27,12 @@ import {
 	PLATFORM_PROFILES,
 	wrapPlatformFragment
 } from "./platforms/profiles";
+import { buildPublishPackageV1 } from "./publishing/package";
 import type {
 	CopyPlatform,
 	PlatformProfile
 } from "./platforms/types";
+import type { ResolvedPublishImage } from "./publishing/types";
 
 const VIEW_TYPE_WECHAT_PREVIEW = "obsidian-to-publish-view";
 
@@ -198,6 +200,14 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "copy-current-note-publish-package-json",
+			name: "复制当前笔记发布包 JSON",
+			callback: () => {
+				void this.copyCurrentNotePublishPackageJson();
+			}
+		});
+
+		this.addCommand({
 			id: "copy-current-note-for-wechat",
 			name: "复制当前笔记到微信公众号",
 			callback: () => {
@@ -280,6 +290,16 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		}
 	}
 
+	async copyCurrentNotePublishPackageJson() {
+		const leaf = await this.getOrCreatePreviewLeaf();
+		this.app.workspace.revealLeaf(leaf);
+
+		if (leaf.view instanceof WeChatPreviewCopyView) {
+			await leaf.view.renderActiveFile();
+			await leaf.view.copyPublishPackageJson();
+		}
+	}
+
 	async copyCurrentNoteForPlatform(platform: CopyPlatform) {
 		await this.setTargetPlatform(platform);
 		await this.copyCurrentNoteForTargetPlatform();
@@ -359,6 +379,21 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 			blob: new Blob([buffer], { type: mime }),
 			file,
 			mime
+		};
+	}
+
+	async fileToResolvedPublishImage(file: TFile): Promise<ResolvedPublishImage> {
+		const mime = IMAGE_MIME_BY_EXTENSION[file.extension.toLowerCase()];
+		if (!mime) {
+			throw new Error(`Unsupported image type: ${file.extension}`);
+		}
+
+		return {
+			path: file.path,
+			fileName: file.name,
+			mime,
+			data: await this.app.vault.readBinary(file),
+			mtime: file.stat.mtime
 		};
 	}
 
@@ -657,6 +692,38 @@ class WeChatPreviewCopyView extends ItemView {
 			new Notice(getCopyAndOpenNotice(result));
 		} else {
 			new Notice(`${getCopyNotice(result.profile, result)} 无法自动打开编辑器，请手动打开：${result.profile.editorUrl}`);
+		}
+	}
+
+	async copyPublishPackageJson() {
+		if (!this.currentFile) {
+			new Notice("请先打开一篇 Markdown 笔记。");
+			return;
+		}
+
+		try {
+			const clipboard = await this.buildClipboardPayload();
+			const publishPackage = await buildPublishPackageV1({
+				targets: [this.plugin.settings.targetPlatform],
+				note: {
+					path: this.currentFile.path,
+					basename: this.currentFile.basename,
+					mtime: this.currentFile.stat.mtime
+				},
+				markdown: this.currentMarkdown,
+				html: clipboard.html,
+				text: clipboard.text,
+				resolveImage: async (src) => {
+					const file = this.resolveLinkToImageFile(src);
+					return file ? this.plugin.fileToResolvedPublishImage(file) : null;
+				}
+			});
+
+			await writeTextClipboard(JSON.stringify(publishPackage, null, "\t"));
+			new Notice(`已复制发布包 JSON（${publishPackage.assets.length} 个资源，${publishPackage.warnings.length} 条提示）。`);
+		} catch (error) {
+			console.error(error);
+			new Notice("复制发布包 JSON 失败，请查看控制台。");
 		}
 	}
 

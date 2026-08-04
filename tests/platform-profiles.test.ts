@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	buildZhishixingqiuTableRows,
 	isCopyPlatform,
 	PLATFORM_PROFILE_LIST,
 	PLATFORM_PROFILES
@@ -85,6 +86,48 @@ describe("platform profiles", () => {
 
 		expect(linkRule?.style).toContain("font-size:16px");
 		expect(linkRule?.style).toContain("text-decoration:none");
+	});
+
+	it("keeps table cell text at the normal body size for Zhishixingqiu", () => {
+		const tableCellRule = PLATFORM_PROFILES.zhishixingqiu.rules.find(
+			(rule) => rule.selector === "th,td"
+		);
+
+		expect(tableCellRule?.style).toContain("font-size:16px");
+	});
+
+	it("converts Zhishixingqiu tables into labeled block rows", () => {
+		expect(buildZhishixingqiuTableRows(
+			["平台", "格式", "下一步"],
+			[
+				["微信公众号", "Rich HTML", "预期可嵌入"],
+				["知识星球", "Rich HTML", "需转换表格"]
+			]
+		)).toEqual([
+			[
+				{ label: "平台", value: "微信公众号" },
+				{ label: "格式", value: "Rich HTML" },
+				{ label: "下一步", value: "预期可嵌入" }
+			],
+			[
+				{ label: "平台", value: "知识星球" },
+				{ label: "格式", value: "Rich HTML" },
+				{ label: "下一步", value: "需转换表格" }
+			]
+		]);
+	});
+
+	it("keeps headerless Zhishixingqiu table rows separated", () => {
+		expect(buildZhishixingqiuTableRows(
+			[],
+			[
+				["A", "B"],
+				["C", "D"]
+			]
+		)).toEqual([
+			[{ value: "A ｜ B" }],
+			[{ value: "C ｜ D" }]
+		]);
 	});
 
 	it("accepts known platform ids and rejects unknown values", () => {
