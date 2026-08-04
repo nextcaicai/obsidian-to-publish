@@ -1,6 +1,6 @@
 (function () {
-	const REQUEST_SOURCE = "OTP_COMPANION_JUEJIN_UPLOAD_REQUEST_V2";
-	const RESPONSE_SOURCE = "OTP_COMPANION_JUEJIN_UPLOAD_RESPONSE_V2";
+	const REQUEST_SOURCE = "OTP_COMPANION_JUEJIN_UPLOAD_REQUEST_V3";
+	const RESPONSE_SOURCE = "OTP_COMPANION_JUEJIN_UPLOAD_RESPONSE_V3";
 	let webpackRequire = null;
 
 	function getWebpackRequire() {
@@ -37,18 +37,27 @@
 		});
 	}
 
-	async function uploadAssets(assets) {
+	async function uploadAssets(assets, options = {}) {
 		const require = getWebpackRequire();
 		const Uploader = getUploaderConstructor(require);
 		const files = assets.map(base64ToFile);
 		const token = await getUploadToken();
-		const results = await Promise.all(files.map((file) => uploadFile(file, token, Uploader)));
-		const imageUrls = await Promise.all(results.map((result) => getImageUrl(result.Uri)));
-		return results.map((result) => ({
-			url: imageUrls.find((item) => item.uri === result.Uri)?.url || "",
-			width: result?.ImageWidth || 0,
-			height: result?.ImageHeight || 0
-		}));
+		return mapWithConcurrency(files, normalizePositiveInteger(options.concurrency, 2), async (file) => {
+			try {
+				const result = await retry(() => uploadFile(file, token, Uploader), normalizePositiveInteger(options.retries, 2));
+				const imageUrl = await retry(() => getImageUrl(result.Uri), normalizePositiveInteger(options.retries, 2));
+				return {
+					url: imageUrl.url,
+					width: result?.ImageWidth || 0,
+					height: result?.ImageHeight || 0
+				};
+			} catch (error) {
+				return {
+					url: "",
+					error: error?.message || "Juejin image upload failed."
+				};
+			}
+		});
 	}
 
 	function getUploaderConstructor(require) {
@@ -134,6 +143,44 @@
 		return `${url.pathname}${url.search}`;
 	}
 
+	async function mapWithConcurrency(items, concurrency, mapper) {
+		const results = new Array(items.length);
+		let cursor = 0;
+		const workers = new Array(Math.min(concurrency, items.length)).fill(null).map(async () => {
+			while (cursor < items.length) {
+				const index = cursor;
+				cursor += 1;
+				results[index] = await mapper(items[index], index);
+			}
+		});
+		await Promise.all(workers);
+		return results;
+	}
+
+	async function retry(task, retries) {
+		let lastError = null;
+		for (let attempt = 0; attempt <= retries; attempt += 1) {
+			try {
+				return await task();
+			} catch (error) {
+				lastError = error;
+				if (attempt < retries) {
+					await delay(800 * (attempt + 1));
+				}
+			}
+		}
+		throw lastError || new Error("Juejin image upload failed.");
+	}
+
+	function normalizePositiveInteger(value, fallback) {
+		const number = Number(value);
+		return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback;
+	}
+
+	function delay(ms) {
+		return new Promise((resolve) => window.setTimeout(resolve, ms));
+	}
+
 	window.addEventListener("message", async (event) => {
 		if (event.source !== window || event.data?.source !== REQUEST_SOURCE) {
 			return;
@@ -141,7 +188,7 @@
 
 		const requestId = event.data.requestId;
 		try {
-			const uploads = await uploadAssets(event.data.assets || []);
+			const uploads = await uploadAssets(event.data.assets || [], event.data.options || {});
 			window.postMessage({
 				source: RESPONSE_SOURCE,
 				requestId,

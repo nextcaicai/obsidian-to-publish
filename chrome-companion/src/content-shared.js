@@ -164,17 +164,23 @@
 			});
 		}
 
-		const uploadByAssetId = new Map();
+		const uniqueImages = [];
+		const seenAssetIds = new Set();
 		for (const item of uploadPlan.images) {
-			if (uploadByAssetId.has(item.assetId)) {
+			if (seenAssetIds.has(item.assetId)) {
 				continue;
 			}
-
-			const uploaded = await uploadImageViaPageScript(item.file, adapter);
-			if (uploaded?.url) {
-				uploadByAssetId.set(item.assetId, uploaded.url);
-			}
+			seenAssetIds.add(item.assetId);
+			uniqueImages.push(item);
 		}
+
+		const uploadedImages = await uploadImagesViaPageScript(uniqueImages.map((item) => item.file), adapter);
+		const uploadByAssetId = new Map();
+		uploadedImages.forEach((uploaded, index) => {
+			if (uploaded?.url) {
+				uploadByAssetId.set(uniqueImages[index].assetId, uploaded.url);
+			}
+		});
 
 		const markdown = uploadPlan.markdownParts.map((part) => {
 			if (part.type === "text") {
@@ -267,11 +273,21 @@
 				}
 			}
 
-			const uploadInserted = pasteResult.handled && await waitForCondition(
-				() => !getWritableText(target).includes(item.marker),
+			const uploadOutcome = (pasteResult.handled || adapter.cleanupUploadedMarkerAltText) ? await waitForValue(
+				() => findMarkerUploadOutcome(getWritableText(target), item, adapter),
 				adapter.imageUploadWaitMs ?? 12000,
 				adapter.markerPollMs ?? 250
-			);
+			) : null;
+			if (uploadOutcome?.type === "wrapped") {
+				const replacement = `![${getSafeImageAlt(item.file)}](${uploadOutcome.url})`;
+				const cleaned = replaceTextInWritable(target, uploadOutcome.snippet, replacement);
+				if (cleaned) {
+					imageIncluded = true;
+					continue;
+				}
+			}
+
+			const uploadInserted = uploadOutcome?.type === "removed";
 			imageIncluded = imageIncluded || uploadInserted;
 			if (!uploadInserted) {
 				removeMarkerText(target, item.marker);
@@ -524,6 +540,52 @@
 		};
 	}
 
+	function findMarkerUploadOutcome(text, item, adapter) {
+		if (!text.includes(item.marker)) {
+			return {
+				type: "removed"
+			};
+		}
+
+		if (!adapter.cleanupUploadedMarkerAltText) {
+			return null;
+		}
+
+		const wrapped = findMarkerWrappedImageMarkdown(text, item.marker, adapter);
+		return wrapped ? {
+			type: "wrapped",
+			...wrapped
+		} : null;
+	}
+
+	function findMarkerWrappedImageMarkdown(text, marker, adapter) {
+		const markerIndex = text.indexOf(marker);
+		if (markerIndex < 0) {
+			return null;
+		}
+
+		const start = text.lastIndexOf("![", markerIndex);
+		const urlStart = text.indexOf("](", markerIndex + marker.length);
+		if (start < 0 || urlStart < 0) {
+			return null;
+		}
+
+		const close = text.indexOf(")", urlStart + 2);
+		if (close < 0) {
+			return null;
+		}
+
+		const url = text.slice(urlStart + 2, close).trim();
+		if (!/^https?:\/\//i.test(url) || !isUploadedImageMatch(url, adapter)) {
+			return null;
+		}
+
+		return {
+			snippet: text.slice(start, close + 1),
+			url
+		};
+	}
+
 	function extractMarkdownImageReferences(text) {
 		const matches = [];
 		const pattern = /!\[([^\]\n]*)]\((https?:\/\/[^\s)]+)\)/g;
@@ -665,19 +727,30 @@
 		return null;
 	}
 
-	async function uploadImageViaPageScript(file, adapter) {
+	async function uploadImagesViaPageScript(files, adapter) {
 		if (!adapter.pageUploadScript) {
-			return null;
+			return [];
 		}
 
 		await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
+		const batchSize = Math.max(1, adapter.pageUploadBatchSize ?? files.length);
+		const uploads = [];
+		for (let index = 0; index < files.length; index += batchSize) {
+			const batch = files.slice(index, index + batchSize);
+			const batchUploads = await uploadImageBatchViaPageScript(batch, adapter);
+			uploads.push(...batchUploads);
+		}
+		return uploads;
+	}
+
+	async function uploadImageBatchViaPageScript(files, adapter) {
 		const requestId = `otp-upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-		const asset = await fileToBase64Asset(file);
+		const assets = await Promise.all(files.map(fileToBase64Asset));
 		return new Promise((resolve) => {
 			const timeout = window.setTimeout(() => {
 				window.removeEventListener("message", onMessage);
-				resolve(null);
-			}, adapter.imageUploadWaitMs ?? 12000);
+				resolve(files.map(() => null));
+			}, adapter.pageUploadWaitMs ?? Math.max(adapter.imageUploadWaitMs ?? 12000, files.length * 15000));
 
 			function onMessage(event) {
 				if (event.source !== window
@@ -690,18 +763,28 @@
 				window.removeEventListener("message", onMessage);
 				if (!event.data.ok) {
 					console.warn("Juejin page upload failed.", event.data.error);
-					resolve(null);
+					resolve(files.map(() => null));
 					return;
 				}
 
-				resolve(event.data.uploads?.[0] || null);
+				const uploads = event.data.uploads || [];
+				for (const upload of uploads) {
+					if (upload?.error) {
+						console.warn("Juejin image upload failed.", upload.error);
+					}
+				}
+				resolve(files.map((_, index) => uploads[index] || null));
 			}
 
 			window.addEventListener("message", onMessage);
 			window.postMessage({
 				source: adapter.pageUploadRequestSource,
 				requestId,
-				assets: [asset]
+				assets,
+				options: {
+					concurrency: adapter.pageUploadConcurrency ?? 2,
+					retries: adapter.pageUploadRetries ?? 2
+				}
 			}, window.location.origin);
 		});
 	}

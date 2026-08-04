@@ -8,8 +8,11 @@
 		includeFilesInMainPaste: false,
 		pasteFilesAfterText: false,
 		replaceAssetUrlsInMarkdown: false,
-		imageUploadWaitMs: 15000,
-		markerWaitMs: 5000,
+		cleanupUploadedMarkerAltText: true,
+		uploadedImageUrlPattern: /csdnimg\.cn/i,
+		imageUploadWaitMs: 30000,
+		markerWaitMs: 8000,
+		markerPollMs: 300,
 		titleClickText: ["【无标题】", "无标题"],
 		titleSelectors: [
 			"input[placeholder*='标题']",
