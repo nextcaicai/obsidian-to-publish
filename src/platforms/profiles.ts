@@ -404,7 +404,7 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 		id: "zhihu",
 		label: "知乎",
 		copyLabel: "知乎",
-		editorUrl: "https://www.zhihu.com",
+		editorUrl: "https://zhuanlan.zhihu.com/write",
 		preferredFormat: "rich-html",
 		capabilities: {
 			...RICH_HTML_CAPABILITIES,
@@ -432,7 +432,7 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 		id: "juejin",
 		label: "掘金",
 		copyLabel: "掘金",
-		editorUrl: "https://juejin.cn",
+		editorUrl: "https://juejin.cn/editor/drafts/new?v=2",
 		preferredFormat: "markdown",
 		capabilities: {
 			...MARKDOWN_CAPABILITIES,
@@ -447,7 +447,7 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 		id: "substack",
 		label: "Substack",
 		copyLabel: "Substack",
-		editorUrl: "https://substack.com/home",
+		editorUrl: "https://nextcaicai.substack.com/publish/post/",
 		preferredFormat: "rich-html",
 		capabilities: {
 			...RICH_HTML_CAPABILITIES,

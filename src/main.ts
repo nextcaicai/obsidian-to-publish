@@ -371,21 +371,10 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 
 		try {
 			const publishPackage = await leaf.view.buildPublishPackage();
-			const profile = this.getCurrentPlatformProfile();
-			const result = await this.getChromeCompanionBridgeService().request("article.importDraft", {
-				package: publishPackage
-			}, { timeoutMs: 15000 });
-			const accepted = isRecord(result) && result.accepted === true;
-			if (accepted) {
-				new Notice(`已发送到 Chrome 插件：${profile.copyLabel}。`);
-			} else {
-				new Notice("Chrome 插件已响应，但未确认导入，请查看 Chrome 扩展日志。");
-			}
+			await this.sendPublishPackageToChromeCompanion(publishPackage);
 		} catch (error) {
 			console.error(error);
-			const status = this.getChromeCompanionBridgeStatus();
-			const hint = status.hasClient ? "请查看控制台。" : "请确认 Chrome companion 已加载并填入令牌。";
-			new Notice(`发送到 Chrome 插件失败，${hint}`);
+			new Notice("发送到 Chrome 插件失败，请查看控制台。");
 		}
 	}
 
@@ -548,6 +537,33 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 
 		await this.stopChromeCompanionBridge(false);
 		await this.startChromeCompanionBridge(false);
+	}
+
+	async sendPublishPackageToChromeCompanion(publishPackage: PublishPackageV1): Promise<boolean> {
+		if (!await this.startChromeCompanionBridge(false)) {
+			return false;
+		}
+
+		try {
+			const profile = this.getCurrentPlatformProfile();
+			const result = await this.getChromeCompanionBridgeService().request("article.importDraft", {
+				package: publishPackage
+			}, { timeoutMs: 15000 });
+			const accepted = isRecord(result) && result.accepted === true;
+			if (accepted) {
+				new Notice(`已发送到 Chrome 插件：${profile.copyLabel}。`);
+				return true;
+			}
+
+			new Notice("Chrome 插件已响应，但未确认导入，请查看 Chrome 扩展日志。");
+			return false;
+		} catch (error) {
+			console.error(error);
+			const status = this.getChromeCompanionBridgeStatus();
+			const hint = status.hasClient ? "请查看控制台。" : "请确认 Chrome companion 已加载并填入令牌。";
+			new Notice(`发送到 Chrome 插件失败，${hint}`);
+			return false;
+		}
 	}
 
 	getChromeCompanionBridgeStatus() {
@@ -859,6 +875,24 @@ class WeChatPreviewCopyView extends ItemView {
 	}
 
 	async copyAndOpenCurrentPlatform() {
+		if (this.plugin.settings.chromeCompanionBridge.enabled) {
+			if (!this.currentFile) {
+				new Notice("请先打开一篇 Markdown 笔记。");
+				return;
+			}
+
+			await this.renderActiveFile();
+			try {
+				const publishPackage = await this.buildPublishPackage();
+				if (await this.plugin.sendPublishPackageToChromeCompanion(publishPackage)) {
+					return;
+				}
+			} catch (error) {
+				console.error(error);
+				new Notice("发送到 Chrome 插件失败，已改用复制并打开兜底。");
+			}
+		}
+
 		const result = await this.copyForCurrentPlatform({ notifySuccess: false });
 		if (!result) {
 			return;

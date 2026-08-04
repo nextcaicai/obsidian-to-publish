@@ -47,6 +47,13 @@ describe("platform profiles", () => {
 		expect(PLATFORM_PROFILES.x.capabilities.supportsMarkdown).toBe(true);
 	});
 
+	it("uses direct new-article editor URLs for browser companion targets", () => {
+		expect(PLATFORM_PROFILES.zhihu.editorUrl).toBe("https://zhuanlan.zhihu.com/write");
+		expect(PLATFORM_PROFILES.csdn.editorUrl).toBe("https://editor.csdn.net/md/");
+		expect(PLATFORM_PROFILES.juejin.editorUrl).toBe("https://juejin.cn/editor/drafts/new?v=2");
+		expect(PLATFORM_PROFILES.substack.editorUrl).toBe("https://nextcaicai.substack.com/publish/post/");
+	});
+
 	it("marks platforms that require remote image URLs", () => {
 		expect(PLATFORM_PROFILES.zhihu.capabilities.requiresRemoteImageUrl).toBe(true);
 		expect(PLATFORM_PROFILES.juejin.capabilities.requiresRemoteImageUrl).toBe(true);

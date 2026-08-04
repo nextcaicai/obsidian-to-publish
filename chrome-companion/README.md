@@ -7,8 +7,9 @@ This directory contains an unpacked Chrome extension for the Obsidian to Publish
 - Connects to the Obsidian desktop plugin through `ws://127.0.0.1:<port>/bridge`.
 - Receives `PublishPackageV1` from Obsidian.
 - Opens the target platform editor tab.
+- Automatically retries writing the received draft into the editor after the page loads.
 - Shows a small in-page panel with:
-  - `尝试填入`: inserts Markdown into the currently focused or largest writable editor.
+  - `尝试填入`: inserts the draft into the currently focused or largest writable editor.
   - `复制 Markdown`: copies the draft Markdown as a fallback.
   - `关闭`: clears the latest received task.
 
@@ -25,5 +26,5 @@ This directory contains an unpacked Chrome extension for the Obsidian to Publish
 ## MVP Boundaries
 
 - This MVP does not yet implement a dedicated X Articles Draft.js adapter.
-- The current write path is intentionally conservative: it only uses visible browser-editable fields.
+- The current write path is intentionally conservative: it only uses visible browser-editable fields and retries for late-loaded editors.
 - WeChat Official Account and Feishu should continue through official APIs, not this Chrome companion.
