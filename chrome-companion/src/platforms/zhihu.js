@@ -6,6 +6,7 @@
 		preferPaste: true,
 		includeFilesInMainPaste: true,
 		pasteFilesAfterText: false,
+		omitAssets: true,
 		titleSelectors: [
 			"textarea[placeholder*='标题']",
 			"input[placeholder*='标题']",

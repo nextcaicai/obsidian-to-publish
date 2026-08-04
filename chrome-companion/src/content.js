@@ -54,8 +54,8 @@ function renderPanel(task, adapter) {
 	panel.appendChild(controls);
 
 	const insertButton = createButton("尝试填入");
-	insertButton.addEventListener("click", () => {
-		const result = companion.insertDraftWithAdapter(task, adapter);
+	insertButton.addEventListener("click", async () => {
+		const result = await companion.insertDraftWithAdapter(task, adapter);
 		showInlineStatus(panel, getInsertResultMessage(result));
 	});
 	controls.appendChild(insertButton);
@@ -117,7 +117,7 @@ async function autoInsertDraft(task, adapter, panel) {
 	const startedAt = Date.now();
 	let titleAlreadyInserted = false;
 	while (Date.now() - startedAt < companion.AUTO_INSERT_TIMEOUT_MS) {
-		const result = companion.insertDraftWithAdapter(task, adapter, {
+		const result = await companion.insertDraftWithAdapter(task, adapter, {
 			skipTitle: titleAlreadyInserted
 		});
 		titleAlreadyInserted = titleAlreadyInserted || result.titleInserted;

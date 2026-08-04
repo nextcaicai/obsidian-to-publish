@@ -3,9 +3,12 @@
 		id: "juejin",
 		hosts: ["juejin.cn"],
 		bodyFormat: "markdown",
+		insertMode: "markdown-sequential-assets",
 		preferPaste: true,
 		includeFilesInMainPaste: false,
-		pasteFilesAfterText: true,
+		pasteFilesAfterText: false,
+		replaceAssetUrlsInMarkdown: false,
+		filePasteDelayMs: 1800,
 		titleSelectors: [
 			"input[placeholder*='标题']",
 			"textarea[placeholder*='标题']",

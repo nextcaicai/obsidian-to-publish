@@ -5,7 +5,9 @@
 		bodyFormat: "markdown",
 		preferPaste: false,
 		includeFilesInMainPaste: false,
-		pasteFilesAfterText: true,
+		pasteFilesAfterText: false,
+		replaceAssetUrlsInMarkdown: false,
+		omitAssets: true,
 		titleSelectors: [
 			"input[placeholder*='Title']",
 			"textarea[placeholder*='Title']",

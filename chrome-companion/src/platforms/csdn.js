@@ -3,9 +3,12 @@
 		id: "csdn",
 		hosts: ["editor.csdn.net"],
 		bodyFormat: "markdown",
+		insertMode: "markdown-sequential-assets",
 		preferPaste: true,
 		includeFilesInMainPaste: false,
 		pasteFilesAfterText: false,
+		replaceAssetUrlsInMarkdown: false,
+		filePasteDelayMs: 1800,
 		titleClickText: ["【无标题】", "无标题"],
 		titleSelectors: [
 			"input[placeholder*='标题']",

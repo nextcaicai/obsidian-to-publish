@@ -18,11 +18,11 @@
 		}) || null;
 	}
 
-	function insertDraftWithAdapter(task, adapter, options = {}) {
+	async function insertDraftWithAdapter(task, adapter, options = {}) {
 		const title = task.package?.article?.title || "";
 		const payload = buildDraftPayload(task, adapter);
 		const titleInserted = options.skipTitle ? false : tryInsertTitle(title, adapter);
-		const bodyResult = tryInsertBody(payload, adapter);
+		const bodyResult = await tryInsertBody(payload, adapter);
 
 		return {
 			titleInserted,
@@ -53,7 +53,7 @@
 		}).inserted;
 	}
 
-	function tryInsertBody(payload, adapter) {
+	async function tryInsertBody(payload, adapter) {
 		if (!payload.text.trim() && !payload.html.trim() && payload.files.length === 0) {
 			return {
 				inserted: false,
@@ -67,6 +67,10 @@
 				inserted: false,
 				imageIncluded: false
 			};
+		}
+
+		if (adapter.insertMode === "markdown-sequential-assets") {
+			return insertMarkdownSequentialAssets(target, payload, adapter);
 		}
 
 		const mainPayload = adapter.includeFilesInMainPaste === false
@@ -91,6 +95,51 @@
 		}
 
 		return result;
+	}
+
+	async function insertMarkdownSequentialAssets(target, payload, adapter) {
+		const segments = splitMarkdownAssetSegments(payload.text, payload.assetFilesById);
+		let insertedText = false;
+		let imageIncluded = false;
+
+		for (const segment of segments) {
+			if (segment.type === "text") {
+				if (!segment.value) {
+					continue;
+				}
+
+				const result = insertIntoWritableElement(target, {
+					text: segment.value,
+					html: "",
+					files: []
+				}, {
+					allowHtml: false,
+					preferPaste: adapter.preferPaste !== false,
+					replaceExisting: false
+				});
+				insertedText = insertedText || result.inserted;
+				if (!result.inserted) {
+					return {
+						inserted: insertedText,
+						imageIncluded
+					};
+				}
+				continue;
+			}
+
+			const filePasteResult = dispatchPasteEvent(target, {
+				text: "",
+				html: "",
+				files: [segment.file]
+			});
+			imageIncluded = imageIncluded || (filePasteResult.handled && filePasteResult.fileIncluded);
+			await delay(adapter.filePasteDelayMs ?? 1200);
+		}
+
+		return {
+			inserted: insertedText || imageIncluded,
+			imageIncluded
+		};
 	}
 
 	function insertIntoWritableElement(target, payload, options) {
@@ -233,23 +282,53 @@
 		const publishPackage = task.package || {};
 		const article = publishPackage.article || {};
 		const assetMap = buildAssetDataUriMap(publishPackage.assets || []);
-		const files = buildAssetFiles(publishPackage.assets || []);
-		const markdown = replaceAssetUrls(article.markdown || article.text || "", assetMap);
-		const html = replaceAssetUrls(extractSafeHtmlFragment(article.html || ""), assetMap);
+		const files = adapter.omitAssets ? [] : buildAssetFiles(publishPackage.assets || []);
+		const assetFilesById = buildAssetFileMap(publishPackage.assets || []);
+		const sourceMarkdown = adapter.omitAssets
+			? removeMarkdownAssetImages(article.markdown || article.text || "")
+			: article.markdown || article.text || "";
+		const markdown = adapter.replaceAssetUrlsInMarkdown === false
+			? sourceMarkdown
+			: replaceAssetUrls(sourceMarkdown, assetMap);
+		const sourceHtml = adapter.omitAssets
+			? removeImagesFromHtml(extractSafeHtmlFragment(article.html || ""))
+			: extractSafeHtmlFragment(article.html || "");
+		const html = replaceAssetUrls(sourceHtml, assetMap);
 
 		if (adapter.bodyFormat !== "rich-html") {
 			return {
 				text: markdown,
 				html: "",
-				files
+				files,
+				assetFilesById
 			};
 		}
 
 		return {
 			text: article.text || markdown,
 			html,
-			files
+			files,
+			assetFilesById
 		};
+	}
+
+	function removeMarkdownAssetImages(markdown) {
+		return String(markdown || "")
+			.replace(/^\s*!\[[^\]]*]\(asset:\/\/[a-zA-Z0-9_-]+\)\s*$/gm, "")
+			.replace(/!\[[^\]]*]\(asset:\/\/[a-zA-Z0-9_-]+\)/g, "");
+	}
+
+	function removeImagesFromHtml(html) {
+		if (!html.trim()) {
+			return "";
+		}
+
+		const template = document.createElement("template");
+		template.innerHTML = html;
+		for (const image of Array.from(template.content.querySelectorAll("img"))) {
+			image.remove();
+		}
+		return template.innerHTML.trim();
 	}
 
 	function extractSafeHtmlFragment(html) {
@@ -287,6 +366,59 @@
 			}
 		}
 		return files;
+	}
+
+	function buildAssetFileMap(assets) {
+		const map = new Map();
+		for (const asset of assets) {
+			const file = assetToFile(asset);
+			if (file && asset.id) {
+				map.set(asset.id, file);
+			}
+		}
+		return map;
+	}
+
+	function splitMarkdownAssetSegments(markdown, assetFilesById) {
+		const segments = [];
+		const pattern = /!\[([^\]]*)]\(asset:\/\/([a-zA-Z0-9_-]+)\)/g;
+		let lastIndex = 0;
+		let match;
+
+		while ((match = pattern.exec(markdown)) !== null) {
+			if (match.index > lastIndex) {
+				segments.push({
+					type: "text",
+					value: markdown.slice(lastIndex, match.index)
+				});
+			}
+
+			const file = assetFilesById.get(match[2]);
+			if (file) {
+				segments.push({
+					type: "file",
+					file
+				});
+			} else {
+				segments.push({
+					type: "text",
+					value: match[0]
+				});
+			}
+			lastIndex = pattern.lastIndex;
+		}
+
+		if (lastIndex < markdown.length) {
+			segments.push({
+				type: "text",
+				value: markdown.slice(lastIndex)
+			});
+		}
+
+		return segments.length > 0 ? segments : [{
+			type: "text",
+			value: markdown
+		}];
 	}
 
 	function assetToFile(asset) {
