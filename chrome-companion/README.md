@@ -28,3 +28,11 @@ This directory contains an unpacked Chrome extension for the Obsidian to Publish
 - This MVP does not yet implement a dedicated X Articles Draft.js adapter.
 - The current write path is intentionally conservative: it only uses visible browser-editable fields and retries for late-loaded editors.
 - WeChat Official Account and Feishu should continue through official APIs, not this Chrome companion.
+
+## Adapter Layout
+
+- `src/content-shared.js`: shared DOM, paste, asset, and retry helpers.
+- `src/platforms/*.js`: platform-specific selectors and insertion strategy.
+- `src/content.js`: page entrypoint, panel UI, and retry loop.
+
+Keep platform-specific fixes in the matching `src/platforms/<platform>.js` file unless the shared helper itself is wrong.

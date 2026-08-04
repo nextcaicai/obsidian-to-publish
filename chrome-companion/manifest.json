@@ -6,7 +6,8 @@
 	"permissions": [
 		"clipboardWrite",
 		"storage",
-		"tabs"
+		"tabs",
+		"windows"
 	],
 	"host_permissions": [
 		"ws://127.0.0.1:*/*",
@@ -42,6 +43,13 @@
 				"https://wx.zsxq.com/*"
 			],
 			"js": [
+				"src/content-shared.js",
+				"src/platforms/x.js",
+				"src/platforms/csdn.js",
+				"src/platforms/juejin.js",
+				"src/platforms/zhihu.js",
+				"src/platforms/substack.js",
+				"src/platforms/misc.js",
 				"src/content.js"
 			],
 			"run_at": "document_idle",

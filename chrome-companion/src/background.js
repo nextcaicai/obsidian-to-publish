@@ -260,7 +260,12 @@ async function importDraft(params) {
 		package: publishPackage
 	};
 	await chrome.storage.local.set({ [STORAGE_KEYS.latestTask]: task });
-	await chrome.tabs.create({ url: platform.editorUrl, active: true });
+	const tab = await chrome.tabs.create({ url: platform.editorUrl, active: true });
+	if (typeof tab.windowId === "number") {
+		await chrome.windows.update(tab.windowId, {
+			focused: true
+		});
+	}
 
 	return {
 		accepted: true,
