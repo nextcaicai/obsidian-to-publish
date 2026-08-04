@@ -36,4 +36,4 @@ This directory contains an unpacked Chrome extension for the Obsidian to Publish
 - `src/content.js`: page entrypoint, panel UI, and retry loop.
 
 Keep platform-specific fixes in the matching `src/platforms/<platform>.js` file unless the shared helper itself is wrong.
-Current image policy: Substack keeps rich HTML image paste; CSDN and Juejin insert Markdown text and paste local image files at each original `asset://` position; X and Zhihu intentionally omit local images until dedicated image adapters are implemented.
+Current image policy: Substack keeps rich HTML image paste; CSDN inserts Markdown with temporary image markers and pastes local image files at each marker; Juejin uploads images through the page uploader before inserting final Markdown; X and Zhihu intentionally omit local images until dedicated image adapters are implemented.

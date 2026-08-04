@@ -56,6 +56,16 @@
 			"all_frames": false
 		}
 	],
+	"web_accessible_resources": [
+		{
+			"resources": [
+				"src/page-juejin-upload.js"
+			],
+			"matches": [
+				"https://juejin.cn/*"
+			]
+		}
+	],
 	"options_page": "options.html",
 	"action": {
 		"default_title": "Obsidian to Publish Companion"

@@ -73,6 +73,14 @@
 			return insertMarkdownSequentialAssets(target, payload, adapter);
 		}
 
+		if (adapter.insertMode === "markdown-placeholder-assets") {
+			return insertMarkdownWithImageMarkers(target, payload, adapter);
+		}
+
+		if (adapter.insertMode === "markdown-page-upload-assets") {
+			return insertMarkdownWithPageUploadedAssets(target, payload, adapter);
+		}
+
 		const mainPayload = adapter.includeFilesInMainPaste === false
 			? { ...payload, files: [] }
 			: payload;
@@ -138,6 +146,140 @@
 
 		return {
 			inserted: insertedText || imageIncluded,
+			imageIncluded
+		};
+	}
+
+	async function insertMarkdownWithPageUploadedAssets(target, payload, adapter) {
+		const uploadPlan = buildMarkdownImageUploadPlan(payload.text, payload.assetFilesById);
+		if (uploadPlan.images.length === 0) {
+			return insertIntoWritableElement(target, {
+				text: payload.text,
+				html: "",
+				files: []
+			}, {
+				allowHtml: false,
+				preferPaste: adapter.preferPaste !== false,
+				replaceExisting: false
+			});
+		}
+
+		const uploadByAssetId = new Map();
+		for (const item of uploadPlan.images) {
+			if (uploadByAssetId.has(item.assetId)) {
+				continue;
+			}
+
+			const uploaded = await uploadImageViaPageScript(item.file, adapter);
+			if (uploaded?.url) {
+				uploadByAssetId.set(item.assetId, uploaded.url);
+			}
+		}
+
+		const markdown = uploadPlan.markdownParts.map((part) => {
+			if (part.type === "text") {
+				return part.value;
+			}
+			const url = uploadByAssetId.get(part.assetId);
+			return url ? `![${part.alt}](${url})` : `[[OTP_IMAGE_${part.assetId}_UPLOAD_FAILED]]`;
+		}).join("");
+		const result = insertIntoWritableElement(target, {
+			text: markdown,
+			html: "",
+			files: []
+		}, {
+			allowHtml: false,
+			preferPaste: adapter.preferPaste !== false,
+			replaceExisting: false
+		});
+
+		return {
+			inserted: result.inserted,
+			imageIncluded: uploadByAssetId.size > 0
+		};
+	}
+
+	async function insertMarkdownWithImageMarkers(target, payload, adapter) {
+		const markerPlan = buildMarkdownImageMarkerPlan(payload.text, payload.assetFilesById);
+		const textResult = insertIntoWritableElement(target, {
+			text: markerPlan.markdown,
+			html: "",
+			files: []
+		}, {
+			allowHtml: false,
+			preferPaste: adapter.preferPaste !== false,
+			replaceExisting: false
+		});
+		if (!textResult.inserted) {
+			return {
+				inserted: false,
+				imageIncluded: false
+			};
+		}
+
+		let imageIncluded = false;
+		for (const item of markerPlan.images) {
+			const markerFound = await waitForCondition(
+				() => selectMarkerText(target, item.marker),
+				adapter.markerWaitMs ?? 5000,
+				adapter.markerPollMs ?? 250
+			);
+			if (!markerFound) {
+				continue;
+			}
+
+			const beforeUploadText = getUploadSearchText(target, adapter);
+			if (adapter.uploadImagesViaFileInput) {
+				const inputUploadStarted = await uploadImageViaFileInput(item.file, adapter);
+				const inputUploadedImageMarkdown = inputUploadStarted
+					? await waitForValue(
+						() => findNewUploadedImageMarkdown(beforeUploadText, getUploadSearchText(target, adapter), adapter, item),
+						adapter.imageUploadWaitMs ?? 12000,
+						adapter.markerPollMs ?? 250
+					)
+					: null;
+				if (inputUploadedImageMarkdown) {
+					const relocated = relocateUploadedImageMarkdown(target, item.marker, inputUploadedImageMarkdown.snippet);
+					if (relocated) {
+						imageIncluded = true;
+						continue;
+					}
+				}
+			}
+
+			const pasteResult = dispatchPasteEvent(target, {
+				text: "",
+				html: "",
+				files: [item.file]
+			});
+			const relocatedImageMarkdown = adapter.relocateUploadedImageMarkdown
+				? await waitForValue(
+					() => findNewUploadedImageMarkdown(beforeUploadText, getUploadSearchText(target, adapter), adapter, item),
+					adapter.imageUploadWaitMs ?? 12000,
+					adapter.markerPollMs ?? 250
+				)
+				: null;
+			if (relocatedImageMarkdown) {
+				const relocated = relocateUploadedImageMarkdown(target, item.marker, relocatedImageMarkdown.snippet);
+				if (relocated) {
+					imageIncluded = true;
+					continue;
+				}
+			}
+
+			const uploadInserted = pasteResult.handled && await waitForCondition(
+				() => !getWritableText(target).includes(item.marker),
+				adapter.imageUploadWaitMs ?? 12000,
+				adapter.markerPollMs ?? 250
+			);
+			imageIncluded = imageIncluded || uploadInserted;
+			if (!uploadInserted) {
+				removeMarkerText(target, item.marker);
+			}
+		}
+
+		return {
+			inserted: true,
 			imageIncluded
 		};
 	}
@@ -276,6 +418,341 @@
 			bubbles: true,
 			cancelable: true
 		}));
+	}
+
+	function getCodeMirrorView(target) {
+		const content = target?.classList?.contains("cm-content")
+			? target
+			: target?.closest?.(".cm-editor")?.querySelector(".cm-content")
+				|| target?.querySelector?.(".cm-content");
+		const view = content?.cmView?.view || content?.cmView?.rootView?.view;
+		return view?.state?.doc && typeof view.dispatch === "function" ? view : null;
+	}
+
+	function replaceTextInWritable(target, search, replacement) {
+		const view = getCodeMirrorView(target);
+		if (view) {
+			const text = view.state.doc.toString();
+			const index = text.indexOf(search);
+			if (index < 0) {
+				return false;
+			}
+
+			view.dispatch({
+				changes: {
+					from: index,
+					to: index + search.length,
+					insert: replacement
+				},
+				selection: {
+					anchor: index + replacement.length
+				},
+				scrollIntoView: true
+			});
+			view.focus();
+			dispatchInputEvent(target, replacement);
+			return true;
+		}
+
+		if (!selectMarkerText(target, search)) {
+			return false;
+		}
+
+		if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+			insertIntoTextControl(target, replacement, false);
+			return true;
+		}
+
+		const inserted = document.execCommand("insertText", false, replacement);
+		if (inserted) {
+			dispatchInputEvent(target, replacement);
+		}
+		return inserted;
+	}
+
+	function removeTextFromWritable(target, text) {
+		return replaceTextInWritable(target, text, "");
+	}
+
+	function relocateUploadedImageMarkdown(target, marker, snippet) {
+		const text = getWritableText(target);
+		if (!text.includes(marker)) {
+			return text.includes(snippet);
+		}
+
+		if (text.includes(snippet)) {
+			removeTextFromWritable(target, snippet);
+		}
+		return replaceTextInWritable(target, marker, snippet);
+	}
+
+	function getUploadSearchText(target, adapter) {
+		const parts = [getWritableText(target)];
+		if (adapter.uploadSearchRootSelector) {
+			const root = target.closest?.(adapter.uploadSearchRootSelector) || document.querySelector(adapter.uploadSearchRootSelector);
+			if (root?.textContent) {
+				parts.push(root.textContent);
+			}
+		}
+		if (adapter.searchDocumentTextForUploads) {
+			parts.push(document.body.innerText || "");
+		}
+		return parts.join("\n");
+	}
+
+	function findNewUploadedImageMarkdown(beforeText, afterText, adapter, item) {
+		const before = String(beforeText || "");
+		const after = String(afterText || "");
+		const markdownImages = extractMarkdownImageReferences(after)
+			.filter((candidate) => !before.includes(candidate.snippet))
+			.filter((candidate) => isUploadedImageMatch(candidate.url, adapter));
+		if (markdownImages.length > 0) {
+			return markdownImages[markdownImages.length - 1];
+		}
+
+		const urls = extractImageUrls(after)
+			.filter((url) => !before.includes(url))
+			.filter((url) => isUploadedImageMatch(url, adapter));
+		const url = urls[urls.length - 1];
+		if (!url) {
+			return null;
+		}
+
+		return {
+			snippet: `![${getSafeImageAlt(item.file)}](${url})`,
+			url
+		};
+	}
+
+	function extractMarkdownImageReferences(text) {
+		const matches = [];
+		const pattern = /!\[([^\]\n]*)]\((https?:\/\/[^\s)]+)\)/g;
+		let match;
+		while ((match = pattern.exec(text)) !== null) {
+			matches.push({
+				snippet: match[0],
+				url: match[2]
+			});
+		}
+		return matches;
+	}
+
+	function extractImageUrls(text) {
+		const matches = [];
+		const pattern = /https?:\/\/[^\s)]+(?:png|jpe?g|gif|webp)(?:\?[^\s)]*)?/gi;
+		let match;
+		while ((match = pattern.exec(text)) !== null) {
+			matches.push(match[0]);
+		}
+		return matches;
+	}
+
+	function isUploadedImageMatch(url, adapter) {
+		const pattern = adapter.uploadedImageUrlPattern;
+		if (!pattern) {
+			return true;
+		}
+		if (pattern instanceof RegExp) {
+			pattern.lastIndex = 0;
+			return pattern.test(url);
+		}
+		return new RegExp(String(pattern), "i").test(url);
+	}
+
+	function getSafeImageAlt(file) {
+		const name = file?.name || "image";
+		return name.replace(/\.[^.]+$/, "").replace(/[\]\n\r]/g, " ").trim() || "image";
+	}
+
+	async function uploadImageViaFileInput(file, adapter) {
+		const input = await findImageUploadInput(adapter);
+		if (!input) {
+			return false;
+		}
+
+		try {
+			const transfer = new DataTransfer();
+			transfer.items.add(file);
+			input.files = transfer.files;
+			input.dispatchEvent(new Event("input", {
+				bubbles: true,
+				cancelable: true
+			}));
+			input.dispatchEvent(new Event("change", {
+				bubbles: true,
+				cancelable: true
+			}));
+			return true;
+		} catch (error) {
+			console.warn("Unable to upload image through file input.", error);
+			return false;
+		}
+	}
+
+	async function findImageUploadInput(adapter) {
+		const existingInputs = new Set(findImageUploadInputs(adapter));
+		const uploadButton = findUploadButton(adapter);
+		if (adapter.clickUploadButtonBeforeInput && uploadButton) {
+			uploadButton.click();
+			await delay(adapter.uploadInputCreateDelayMs ?? 500);
+			const createdInput = findImageUploadInputs(adapter, existingInputs)[0] || null;
+			if (createdInput) {
+				return createdInput;
+			}
+		}
+
+		const existingInput = findImageUploadInputs(adapter)[0] || null;
+		if (existingInput) {
+			return existingInput;
+		}
+
+		if (!adapter.clickUploadButtonBeforeInput && uploadButton) {
+			uploadButton.click();
+			await delay(adapter.uploadInputCreateDelayMs ?? 500);
+		}
+
+		return findImageUploadInputs(adapter, existingInputs)[0] || null;
+	}
+
+	function findImageUploadInputs(adapter, excludedInputs = new Set()) {
+		const selectors = adapter.uploadInputSelectors?.length
+			? adapter.uploadInputSelectors
+			: ["input[type='file']"];
+		const inputs = [];
+		for (const selector of selectors) {
+			for (const input of Array.from(document.querySelectorAll(selector))) {
+				if (excludedInputs.has(input) || !isImageUploadInput(input, adapter) || inputs.includes(input)) {
+					continue;
+				}
+				inputs.push(input);
+			}
+		}
+		return inputs;
+	}
+
+	function isImageUploadInput(input, adapter) {
+		if (!(input instanceof HTMLInputElement) || input.type !== "file" || input.disabled) {
+			return false;
+		}
+		for (const selector of adapter.uploadInputExcludeClosestSelectors || []) {
+			if (input.closest(selector)) {
+				return false;
+			}
+		}
+
+		const accept = input.accept || "";
+		return !accept.trim() || /image|\.(png|jpe?g|gif|webp)/i.test(accept);
+	}
+
+	function findUploadButton(adapter) {
+		for (const selector of adapter.uploadButtonSelectors || []) {
+			const element = document.querySelector(selector);
+			if (element instanceof HTMLElement && isVisibleElement(element)) {
+				return element;
+			}
+		}
+
+		for (const label of adapter.uploadButtonText || []) {
+			const element = Array.from(document.querySelectorAll("button,[role='button'],span,div"))
+				.find((candidate) => candidate instanceof HTMLElement
+					&& isVisibleElement(candidate)
+					&& candidate.textContent?.trim() === label);
+			if (element instanceof HTMLElement) {
+				return element;
+			}
+		}
+
+		return null;
+	}
+
+	async function uploadImageViaPageScript(file, adapter) {
+		if (!adapter.pageUploadScript) {
+			return null;
+		}
+
+		await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
+		const requestId = `otp-upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+		const asset = await fileToBase64Asset(file);
+		return new Promise((resolve) => {
+			const timeout = window.setTimeout(() => {
+				window.removeEventListener("message", onMessage);
+				resolve(null);
+			}, adapter.imageUploadWaitMs ?? 12000);
+
+			function onMessage(event) {
+				if (event.source !== window
+					|| event.data?.source !== adapter.pageUploadResponseSource
+					|| event.data.requestId !== requestId) {
+					return;
+				}
+
+				window.clearTimeout(timeout);
+				window.removeEventListener("message", onMessage);
+				if (!event.data.ok) {
+					console.warn("Juejin page upload failed.", event.data.error);
+					resolve(null);
+					return;
+				}
+
+				resolve(event.data.uploads?.[0] || null);
+			}
+
+			window.addEventListener("message", onMessage);
+			window.postMessage({
+				source: adapter.pageUploadRequestSource,
+				requestId,
+				assets: [asset]
+			}, window.location.origin);
+		});
+	}
+
+	function injectPageScript(scriptPath, version = "v1") {
+		const scriptId = `otp-companion-page-script:${scriptPath}:${version}`;
+		const existingScript = document.getElementById(scriptId);
+		if (existingScript?.dataset.loaded === "true") {
+			return Promise.resolve(true);
+		}
+
+		return new Promise((resolve) => {
+			const script = existingScript || document.createElement("script");
+			const finish = () => {
+				script.dataset.loaded = "true";
+				resolve(true);
+			};
+
+			script.addEventListener("load", finish, {
+				once: true
+			});
+			script.addEventListener("error", () => {
+				console.warn("Unable to load page script.", scriptPath);
+				resolve(false);
+			}, {
+				once: true
+			});
+
+			if (!existingScript) {
+				script.id = scriptId;
+				script.src = chrome.runtime.getURL(scriptPath);
+				script.async = false;
+				(document.head || document.documentElement).appendChild(script);
+			}
+		});
+	}
+
+	function fileToBase64Asset(file) {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => {
+				const value = String(reader.result || "");
+				resolve({
+					name: file.name,
+					type: file.type,
+					base64: value.includes(",") ? value.split(",").pop() : value
+				});
+			};
+			reader.onerror = () => reject(reader.error || new Error("Unable to read image file."));
+			reader.readAsDataURL(file);
+		});
 	}
 
 	function buildDraftPayload(task, adapter) {
@@ -421,6 +898,185 @@
 		}];
 	}
 
+	function buildMarkdownImageUploadPlan(markdown, assetFilesById) {
+		const images = [];
+		const markdownParts = [];
+		const pattern = /!\[([^\]]*)]\(asset:\/\/([a-zA-Z0-9_-]+)\)/g;
+		let lastIndex = 0;
+		let match;
+
+		while ((match = pattern.exec(String(markdown || ""))) !== null) {
+			if (match.index > lastIndex) {
+				markdownParts.push({
+					type: "text",
+					value: String(markdown || "").slice(lastIndex, match.index)
+				});
+			}
+
+			const alt = match[1].replace(/[\]\n\r]/g, " ").trim();
+			const assetId = match[2];
+			const file = assetFilesById.get(assetId);
+			if (file) {
+				const image = {
+					type: "image",
+					assetId,
+					file,
+					alt
+				};
+				images.push(image);
+				markdownParts.push(image);
+			} else {
+				markdownParts.push({
+					type: "text",
+					value: match[0]
+				});
+			}
+			lastIndex = pattern.lastIndex;
+		}
+
+		const source = String(markdown || "");
+		if (lastIndex < source.length) {
+			markdownParts.push({
+				type: "text",
+				value: source.slice(lastIndex)
+			});
+		}
+
+		return {
+			images,
+			markdownParts
+		};
+	}
+
+	function buildMarkdownImageMarkerPlan(markdown, assetFilesById) {
+		const images = [];
+		const pattern = /!\[([^\]]*)]\(asset:\/\/([a-zA-Z0-9_-]+)\)/g;
+		const output = String(markdown || "").replace(pattern, (match, alt, assetId) => {
+			const file = assetFilesById.get(assetId);
+			if (!file) {
+				return match;
+			}
+
+			const marker = `[[OTP_IMAGE_${assetId}_${images.length + 1}]]`;
+			images.push({
+				assetId,
+				file,
+				marker
+			});
+			return marker;
+		});
+
+		return {
+			markdown: output,
+			images
+		};
+	}
+
+	function selectMarkerText(target, marker) {
+		target.focus();
+		const view = getCodeMirrorView(target);
+		if (view) {
+			const text = view.state.doc.toString();
+			const index = text.indexOf(marker);
+			if (index < 0) {
+				return false;
+			}
+
+			view.dispatch({
+				selection: {
+					anchor: index,
+					head: index + marker.length
+				},
+				scrollIntoView: true
+			});
+			view.focus();
+			return true;
+		}
+
+		if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+			const index = target.value.indexOf(marker);
+			if (index < 0) {
+				return false;
+			}
+			target.selectionStart = index;
+			target.selectionEnd = index + marker.length;
+			return true;
+		}
+
+		const range = findTextRange(target, marker);
+		if (!range) {
+			return false;
+		}
+
+		const selection = window.getSelection();
+		if (!selection) {
+			return false;
+		}
+		selection.removeAllRanges();
+		selection.addRange(range);
+		return true;
+	}
+
+	function removeMarkerText(target, marker) {
+		return replaceTextInWritable(target, marker, "");
+	}
+
+	function findTextRange(root, needle) {
+		const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+		let node;
+		while ((node = walker.nextNode())) {
+			const index = node.textContent?.indexOf(needle) ?? -1;
+			if (index < 0) {
+				continue;
+			}
+
+			const range = document.createRange();
+			range.setStart(node, index);
+			range.setEnd(node, index + needle.length);
+			return range;
+		}
+
+		return null;
+	}
+
+	function getWritableText(target) {
+		const view = getCodeMirrorView(target);
+		if (view) {
+			return view.state.doc.toString();
+		}
+
+		if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+			return target.value;
+		}
+
+		return target.textContent || "";
+	}
+
+	async function waitForCondition(check, timeoutMs, intervalMs) {
+		const startedAt = Date.now();
+		while (Date.now() - startedAt < timeoutMs) {
+			if (check()) {
+				return true;
+			}
+			await delay(intervalMs);
+		}
+
+		return false;
+	}
+
+	async function waitForValue(getValue, timeoutMs, intervalMs) {
+		const startedAt = Date.now();
+		while (Date.now() - startedAt < timeoutMs) {
+			const value = getValue();
+			if (value) {
+				return value;
+			}
+			await delay(intervalMs);
+		}
+
+		return null;
+	}
+
 	function assetToFile(asset) {
 		if (!asset || asset.kind !== "image" || !asset.base64 || !asset.mime) {
 			return null;
@@ -539,6 +1195,20 @@
 
 		const rect = element.getBoundingClientRect();
 		if (rect.width < 2 || rect.height < 2) {
+			return false;
+		}
+
+		const style = window.getComputedStyle(element);
+		return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || "1") > 0;
+	}
+
+	function isVisibleElement(element) {
+		if (!element.isConnected) {
+			return false;
+		}
+
+		const rect = element.getBoundingClientRect();
+		if (rect.width < 1 || rect.height < 1) {
 			return false;
 		}
 
