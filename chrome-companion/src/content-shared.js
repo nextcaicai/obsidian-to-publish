@@ -1073,6 +1073,15 @@
 			};
 		}
 
+		for (const dependency of adapter.pageUploadDependencies || []) {
+			const dependencyLoaded = await injectPageScript(dependency, adapter.pageUploadScriptVersion);
+			if (!dependencyLoaded) {
+				return {
+					inserted: false,
+					imageIncluded: false
+				};
+			}
+		}
 		await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
 		const requestId = `otp-write-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 		const assets = markerPlan.images.map((image) => ({
@@ -1142,6 +1151,12 @@
 			return null;
 		}
 
+		for (const dependency of adapter.pageUploadDependencies || []) {
+			const dependencyLoaded = await injectPageScript(dependency, adapter.pageUploadScriptVersion);
+			if (!dependencyLoaded) {
+				return null;
+			}
+		}
 		const scriptLoaded = await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
 		if (!scriptLoaded) {
 			return null;

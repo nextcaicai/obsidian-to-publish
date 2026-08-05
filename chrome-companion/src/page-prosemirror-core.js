@@ -1,125 +1,5 @@
 (function () {
-	const REQUEST_SOURCE = "OTP_COMPANION_PROSEMIRROR_UPLOAD_REQUEST_V1";
-	const RESPONSE_SOURCE = "OTP_COMPANION_PROSEMIRROR_UPLOAD_RESPONSE_V1";
 	const EDITOR_SELECTOR = ".tiptap.ProseMirror[contenteditable='true'],.ProseMirror[contenteditable='true']";
-
-	window.addEventListener("message", (event) => {
-		if (event.source !== window || event.data?.source !== REQUEST_SOURCE) {
-			return;
-		}
-		void handleUploadRequest(event.data);
-	});
-
-	async function handleUploadRequest(message) {
-		const assets = Array.isArray(message.assets) ? message.assets : [];
-		const options = message.options || {};
-		const editorContext = await waitForValue(
-			() => {
-				const root = findEditorRoot();
-				const view = root ? findEditorView(root) : null;
-				return root && view ? { root, view } : null;
-			},
-			options.editorWaitMs || 10000,
-			150
-		);
-		if (!editorContext) {
-			postResponse(message.requestId, false, [], false, "ProseMirror editor state was not reachable.");
-			return;
-		}
-
-		const markers = assets.map((asset) => String(asset?.marker || "")).filter(Boolean);
-		const markersReady = await waitForCondition(
-			() => {
-				const latestView = findEditorView(editorContext.root) || editorContext.view;
-				return markers.every((marker) => findMarker(latestView.state.doc, marker));
-			},
-			options.markerWaitMs || 10000,
-			150
-		);
-		if (!markersReady) {
-			postResponse(message.requestId, false, [], false, "Image markers did not reach the ProseMirror editor state.");
-			return;
-		}
-
-		const uploads = [];
-		for (const asset of assets) {
-			const latestView = findEditorView(editorContext.root) || editorContext.view;
-			uploads.push(await uploadAssetAtMarker(latestView, editorContext.root, asset, options));
-		}
-		postResponse(message.requestId, true, uploads, true);
-	}
-
-	function postResponse(requestId, ok, uploads, started, error = "") {
-		window.postMessage({
-			source: RESPONSE_SOURCE,
-			requestId,
-			ok,
-			uploads,
-			started,
-			...(error ? { error } : {})
-		}, window.location.origin);
-	}
-
-	async function uploadAssetAtMarker(view, root, asset, options) {
-		const marker = String(asset?.marker || "");
-		if (!marker) {
-			return { ok: false, placed: false, error: "Image marker is missing." };
-		}
-		if (!placeSelectionAtMarker(view, marker)) {
-			return { ok: false, placed: false, error: "Image marker was not found in the ProseMirror editor." };
-		}
-
-		let file;
-		try {
-			file = base64ToFile(
-				String(asset.base64 || ""),
-				String(asset.name || asset.fileName || "image.png"),
-				String(asset.type || asset.mime || "image/png")
-			);
-		} catch (error) {
-			return { ok: false, placed: false, error: error?.message || "Image data was invalid." };
-		}
-
-		const beforeImageNodes = new Set(getTopLevelImageBlocks(view.state.doc).map((entry) => entry.node));
-		await delay(60);
-		const uploadStarted = dispatchFilePaste(root, file);
-		if (!uploadStarted) {
-			return { ok: false, placed: false, error: "The editor rejected the image paste event." };
-		}
-
-		const uploadedImage = await waitForValue(
-			() => {
-				const latestView = findEditorView(root) || view;
-				const imageBlock = findNewImageBlock(latestView.state.doc, beforeImageNodes);
-				return imageBlock ? { view: latestView, imageBlock } : null;
-			},
-			options.imageUploadWaitMs || 60000,
-			300
-		);
-		if (!uploadedImage) {
-			return {
-				ok: false,
-				placed: false,
-				error: "Image upload did not create a ProseMirror image block before timeout.",
-				marker
-			};
-		}
-
-		const placed = relocateImageBlockToMarker(
-			uploadedImage.view,
-			marker,
-			uploadedImage.imageBlock.node
-		);
-		return placed
-			? { ok: true, placed: true, markerCleaned: true, marker }
-			: {
-				ok: false,
-				placed: false,
-				error: "The image uploaded, but its ProseMirror block could not be moved to the marker.",
-				markerCleaned: false,
-				marker
-			};
-	}
 
 	function findEditorRoot() {
 		for (const element of Array.from(document.querySelectorAll(EDITOR_SELECTOR))) {
@@ -217,6 +97,22 @@
 		return location;
 	}
 
+	function findMarkerBlock(doc, marker) {
+		const location = findMarker(doc, marker);
+		if (!location) {
+			return null;
+		}
+		const resolved = doc.resolve(location.from);
+		if (resolved.depth < 1) {
+			return null;
+		}
+		return {
+			...location,
+			pos: resolved.before(1),
+			node: resolved.node(1)
+		};
+	}
+
 	function placeSelectionAtMarker(view, marker) {
 		const location = findMarker(view.state.doc, marker);
 		const Selection = view.state.selection?.constructor;
@@ -235,9 +131,19 @@
 
 	function getTopLevelImageBlocks(doc) {
 		const blocks = [];
+		const occurrences = new Map();
 		doc.forEach((node, pos, index) => {
 			if (nodeContainsImage(node)) {
-				blocks.push({ node, pos, index });
+				const fingerprint = getImageBlockFingerprint(node);
+				const occurrence = (occurrences.get(fingerprint) || 0) + 1;
+				occurrences.set(fingerprint, occurrence);
+				blocks.push({
+					node,
+					pos,
+					index,
+					fingerprint,
+					occurrence
+				});
 			}
 		});
 		return blocks;
@@ -264,41 +170,140 @@
 		return /image|figure|media/i.test(typeName) || Boolean(src && /^(blob:|data:|https?:)/i.test(src));
 	}
 
-	function findNewImageBlock(doc, previousNodes) {
-		const imageBlocks = getTopLevelImageBlocks(doc);
-		return imageBlocks.find((entry) => !previousNodes.has(entry.node)) || null;
+	function getImageBlockFingerprint(node) {
+		const imageParts = [];
+		const collect = (candidate) => {
+			if (isImageNode(candidate)) {
+				imageParts.push(`${candidate?.type?.name || "image"}:${stableStringify(candidate?.attrs || {})}`);
+			}
+		};
+		collect(node);
+		node.descendants?.((child) => {
+			collect(child);
+			return true;
+		});
+		return hashString(imageParts.join("|"));
 	}
 
-	function relocateImageBlockToMarker(view, marker, imageNode) {
+	function stableStringify(value, seen = new WeakSet()) {
+		if (value == null || typeof value !== "object") {
+			return JSON.stringify(value);
+		}
+		if (seen.has(value)) {
+			return '"[circular]"';
+		}
+		seen.add(value);
+		if (Array.isArray(value)) {
+			return `[${value.map((item) => stableStringify(item, seen)).join(",")}]`;
+		}
+		const keys = Object.keys(value).sort();
+		return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key], seen)}`).join(",")}}`;
+	}
+
+	function hashString(value) {
+		let hash = 2166136261;
+		for (let index = 0; index < value.length; index += 1) {
+			hash ^= value.charCodeAt(index);
+			hash = Math.imul(hash, 16777619);
+		}
+		return (hash >>> 0).toString(16);
+	}
+
+	function captureImageFingerprintCounts(doc) {
+		const counts = new Map();
+		for (const entry of getTopLevelImageBlocks(doc)) {
+			counts.set(entry.fingerprint, (counts.get(entry.fingerprint) || 0) + 1);
+		}
+		return counts;
+	}
+
+	function findNewImageBlock(doc, beforeCounts) {
+		for (const entry of getTopLevelImageBlocks(doc)) {
+			if (entry.occurrence > (beforeCounts.get(entry.fingerprint) || 0)) {
+				return entry;
+			}
+		}
+		return null;
+	}
+
+	function hasImageImmediatelyBeforeMarker(doc, marker, maxEmptyBlocks = 2) {
+		const markerBlock = findMarkerBlock(doc, marker);
+		if (!markerBlock) {
+			return false;
+		}
+		const blocks = [];
+		doc.forEach((node, pos) => blocks.push({ node, pos }));
+		const markerIndex = blocks.findIndex((entry) => entry.pos === markerBlock.pos);
+		let emptyBlocks = 0;
+		for (let index = markerIndex - 1; index >= 0 && emptyBlocks <= maxEmptyBlocks; index -= 1) {
+			const node = blocks[index].node;
+			if (nodeContainsImage(node)) {
+				return true;
+			}
+			if (String(node.textContent || "").trim()) {
+				return false;
+			}
+			emptyBlocks += 1;
+		}
+		return false;
+	}
+
+	function removeMarker(view, marker) {
 		try {
+			const markerBlock = findMarkerBlock(view.state.doc, marker);
+			if (!markerBlock) {
+				return false;
+			}
 			let transaction = view.state.tr;
-			const imageBlock = getTopLevelImageBlocks(transaction.doc).find((entry) => entry.node === imageNode);
+			if (String(markerBlock.node.textContent || "").trim() === marker) {
+				transaction = transaction.delete(markerBlock.pos, markerBlock.pos + markerBlock.node.nodeSize);
+			} else {
+				transaction = transaction.delete(markerBlock.from, markerBlock.to);
+			}
+			view.dispatch(transaction.scrollIntoView());
+			return !findMarker(view.state.doc, marker);
+		} catch (_error) {
+			return false;
+		}
+	}
+
+	function relocateImageBlockToMarker(view, marker, imageIdentity) {
+		try {
+			if (hasImageImmediatelyBeforeMarker(view.state.doc, marker)) {
+				return removeMarker(view, marker);
+			}
+			const imageFingerprint = typeof imageIdentity === "string"
+				? imageIdentity
+				: imageIdentity?.fingerprint;
+			const imageOccurrence = typeof imageIdentity === "string"
+				? null
+				: imageIdentity?.occurrence;
+			let transaction = view.state.tr;
+			const imageBlock = getTopLevelImageBlocks(transaction.doc)
+				.find((entry) => (
+					entry.fingerprint === imageFingerprint
+					&& (imageOccurrence == null || entry.occurrence === imageOccurrence)
+				));
 			if (!imageBlock) {
 				return false;
 			}
-			transaction = transaction.delete(imageBlock.pos, imageBlock.pos + imageBlock.node.nodeSize);
+			const imageNode = imageBlock.node;
+			transaction = transaction.delete(imageBlock.pos, imageBlock.pos + imageNode.nodeSize);
 
-			const markerLocation = findMarker(transaction.doc, marker);
-			if (!markerLocation) {
+			const markerBlock = findMarkerBlock(transaction.doc, marker);
+			if (!markerBlock) {
 				return false;
 			}
-			const resolvedMarker = transaction.doc.resolve(markerLocation.from);
-			if (resolvedMarker.depth < 1) {
-				return false;
-			}
-			const markerBlockPos = resolvedMarker.before(1);
-			const markerBlock = resolvedMarker.node(1);
-			if (String(markerBlock.textContent || "").trim() === marker) {
+			if (String(markerBlock.node.textContent || "").trim() === marker) {
 				transaction = transaction.replaceWith(
-					markerBlockPos,
-					markerBlockPos + markerBlock.nodeSize,
+					markerBlock.pos,
+					markerBlock.pos + markerBlock.node.nodeSize,
 					imageNode
 				);
 			} else {
-				transaction = transaction.delete(markerLocation.from, markerLocation.to);
-				transaction = transaction.insert(markerBlockPos, imageNode);
+				transaction = transaction.delete(markerBlock.from, markerBlock.to);
+				transaction = transaction.insert(markerBlock.pos, imageNode);
 			}
-
 			view.dispatch(transaction.scrollIntoView());
 			return !findMarker(view.state.doc, marker);
 		} catch (_error) {
@@ -352,5 +357,28 @@
 
 	function delay(ms) {
 		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	const api = {
+		findEditorRoot,
+		findEditorView,
+		findMarker,
+		placeSelectionAtMarker,
+		getTopLevelImageBlocks,
+		captureImageFingerprintCounts,
+		findNewImageBlock,
+		hasImageImmediatelyBeforeMarker,
+		removeMarker,
+		relocateImageBlockToMarker,
+		dispatchFilePaste,
+		base64ToFile,
+		waitForValue,
+		waitForCondition,
+		delay
+	};
+
+	globalThis.OTPProseMirrorCore = api;
+	if (typeof module !== "undefined" && module.exports) {
+		module.exports = api;
 	}
 })();
