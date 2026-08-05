@@ -8,6 +8,7 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Platform,
+	requestUrl,
 	Setting,
 	TFile,
 	WorkspaceLeaf
@@ -32,6 +33,16 @@ import {
 	DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS,
 	generateChromeCompanionToken
 } from "./publishing/chrome-bridge";
+import {
+	createWechatDraftFromPackage,
+	DEFAULT_WECHAT_OFFICIAL_SETTINGS,
+	normalizeWechatOfficialSettings
+} from "./publishing/wechat-official";
+import {
+	DEFAULT_FEISHU_DOCS_SETTINGS,
+	normalizeFeishuDocsSettings,
+	syncPackageToFeishuDoc
+} from "./publishing/feishu-docs";
 import { buildPublishPackageV1 } from "./publishing/package";
 import type {
 	CopyPlatform,
@@ -41,6 +52,12 @@ import type {
 	ChromeCompanionBridgeService,
 	ChromeCompanionBridgeSettings
 } from "./publishing/chrome-bridge";
+import type { FeishuDocsSettings } from "./publishing/feishu-docs";
+import type {
+	OfficialRequestOptions,
+	OfficialRequestResponse
+} from "./publishing/official-http";
+import type { WechatOfficialSettings } from "./publishing/wechat-official";
 import type {
 	PublishPackageV1,
 	ResolvedPublishImage
@@ -52,8 +69,10 @@ interface WeChatPreviewCopySettings {
 	autoOpen: boolean;
 	chromeCompanionBridge: ChromeCompanionBridgeSettings;
 	embedLocalImages: boolean;
+	feishuDocs: FeishuDocsSettings;
 	inlineStyles: boolean;
 	targetPlatform: CopyPlatform;
+	wechatOfficial: WechatOfficialSettings;
 }
 
 interface ClipboardPayload {
@@ -84,8 +103,10 @@ const DEFAULT_SETTINGS: WeChatPreviewCopySettings = {
 	autoOpen: true,
 	chromeCompanionBridge: DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS,
 	embedLocalImages: true,
+	feishuDocs: DEFAULT_FEISHU_DOCS_SETTINGS,
 	inlineStyles: true,
-	targetPlatform: "wechat"
+	targetPlatform: "wechat",
+	wechatOfficial: DEFAULT_WECHAT_OFFICIAL_SETTINGS
 };
 
 const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
@@ -174,6 +195,8 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 	async onload() {
 		const loadedSettings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		const chromeCompanionBridge = normalizeChromeCompanionBridgeSettings(loadedSettings.chromeCompanionBridge);
+		const wechatOfficial = normalizeWechatOfficialSettings(loadedSettings.wechatOfficial);
+		const feishuDocs = normalizeFeishuDocsSettings(loadedSettings.feishuDocs);
 		let shouldSaveNormalizedSettings = false;
 		if (!chromeCompanionBridge.token) {
 			chromeCompanionBridge.token = generateChromeCompanionToken();
@@ -182,9 +205,11 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		this.settings = {
 			...loadedSettings,
 			chromeCompanionBridge,
+			feishuDocs,
 			targetPlatform: isCopyPlatform(loadedSettings.targetPlatform)
 				? loadedSettings.targetPlatform
-				: DEFAULT_SETTINGS.targetPlatform
+				: DEFAULT_SETTINGS.targetPlatform,
+			wechatOfficial
 		};
 		if (shouldSaveNormalizedSettings) {
 			await this.saveSettings();
@@ -237,6 +262,22 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 			name: "发送当前笔记到 Chrome 插件",
 			callback: () => {
 				void this.sendCurrentNoteToChromeCompanion();
+			}
+		});
+
+		this.addCommand({
+			id: "send-current-note-to-wechat-official-draft",
+			name: "发送当前笔记到微信公众号草稿箱",
+			callback: () => {
+				void this.sendCurrentNoteToWechatOfficialDraft();
+			}
+		});
+
+		this.addCommand({
+			id: "sync-current-note-to-feishu-doc",
+			name: "同步当前笔记到飞书云文档",
+			callback: () => {
+				void this.syncCurrentNoteToFeishuDoc();
 			}
 		});
 
@@ -378,6 +419,66 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		}
 	}
 
+	async sendCurrentNoteToWechatOfficialDraft() {
+		const leaf = await this.getOrCreatePreviewLeaf();
+		this.app.workspace.revealLeaf(leaf);
+
+		if (!(leaf.view instanceof WeChatPreviewCopyView)) {
+			new Notice("发布预览未就绪。");
+			return;
+		}
+
+		await leaf.view.renderActiveFile();
+		new Notice("正在发送到微信公众号草稿箱...");
+
+		try {
+			const publishPackage = await leaf.view.buildPublishPackage("wechat");
+			const result = await createWechatDraftFromPackage(
+				publishPackage,
+				this.settings.wechatOfficial,
+				(options) => this.requestOfficialApi(options)
+			);
+			if (result.warnings.length > 0) {
+				console.warn("微信公众号草稿创建提示:", result.warnings);
+			}
+			const warningSuffix = result.warnings.length > 0 ? `，${result.warnings.length} 条提示见控制台` : "";
+			new Notice(`已创建微信公众号草稿：${result.mediaId}（${result.uploadedImages} 张正文图片）${warningSuffix}。`);
+		} catch (error) {
+			console.error(error);
+			new Notice(getErrorMessage(error, "发送到微信公众号草稿箱失败，请查看控制台。"));
+		}
+	}
+
+	async syncCurrentNoteToFeishuDoc() {
+		const leaf = await this.getOrCreatePreviewLeaf();
+		this.app.workspace.revealLeaf(leaf);
+
+		if (!(leaf.view instanceof WeChatPreviewCopyView)) {
+			new Notice("发布预览未就绪。");
+			return;
+		}
+
+		await leaf.view.renderActiveFile();
+		new Notice("正在同步到飞书云文档...");
+
+		try {
+			const publishPackage = await leaf.view.buildPublishPackage(this.settings.targetPlatform);
+			const result = await syncPackageToFeishuDoc(
+				publishPackage,
+				this.settings.feishuDocs,
+				(options) => this.requestOfficialApi(options)
+			);
+			if (result.warnings.length > 0) {
+				console.warn("飞书云文档同步提示:", result.warnings);
+			}
+			const warningSuffix = result.warnings.length > 0 ? `，${result.warnings.length} 条提示见控制台` : "";
+			new Notice(`已同步到飞书云文档：${result.url}${warningSuffix}。`);
+		} catch (error) {
+			console.error(error);
+			new Notice(getErrorMessage(error, "同步到飞书云文档失败，请查看控制台。"));
+		}
+	}
+
 	async copyCurrentNoteForPlatform(platform: CopyPlatform) {
 		await this.setTargetPlatform(platform);
 		await this.copyCurrentNoteForTargetPlatform();
@@ -477,6 +578,10 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	private async requestOfficialApi(options: OfficialRequestOptions): Promise<OfficialRequestResponse> {
+		return requestUrl(options as Parameters<typeof requestUrl>[0]) as Promise<OfficialRequestResponse>;
 	}
 
 	async startChromeCompanionBridge(notify = true): Promise<boolean> {
@@ -922,14 +1027,14 @@ class WeChatPreviewCopyView extends ItemView {
 		}
 	}
 
-	async buildPublishPackage(): Promise<PublishPackageV1> {
+	async buildPublishPackage(targetPlatform: CopyPlatform = this.plugin.settings.targetPlatform): Promise<PublishPackageV1> {
 		if (!this.currentFile) {
 			throw new Error("No active Markdown file.");
 		}
 
-		const clipboard = await this.buildClipboardPayload();
+		const clipboard = await this.buildClipboardPayload(targetPlatform);
 		return buildPublishPackageV1({
-			targets: [this.plugin.settings.targetPlatform],
+			targets: [targetPlatform],
 			note: {
 				path: this.currentFile.path,
 				basename: this.currentFile.basename,
@@ -945,17 +1050,18 @@ class WeChatPreviewCopyView extends ItemView {
 		});
 	}
 
-	private async buildClipboardPayload(): Promise<ClipboardPayload> {
-		const profile = this.plugin.getCurrentPlatformProfile();
-		const fragment = this.previewEl.innerHTML;
+	private async buildClipboardPayload(targetPlatform: CopyPlatform = this.plugin.settings.targetPlatform): Promise<ClipboardPayload> {
+		const profile = PLATFORM_PROFILES[targetPlatform];
+		const platformFragment = await this.buildPlatformFragment(targetPlatform);
+		const fragment = platformFragment.fragment;
 		const imageResult = await this.buildClipboardImagePayload(profile);
 		return {
 			fragment,
 			html: wrapHtmlDocument(fragment),
 			image: imageResult.image,
 			imageCount: imageResult.imageCount,
-			text: this.previewEl.innerText || this.currentMarkdown,
-			unresolvedImages: this.currentUnresolvedImages
+			text: htmlFragmentToText(fragment) || this.currentMarkdown,
+			unresolvedImages: platformFragment.unresolvedImages
 		};
 	}
 
@@ -992,11 +1098,11 @@ class WeChatPreviewCopyView extends ItemView {
 		}
 	}
 
-	private async buildPlatformFragment(): Promise<{
+	private async buildPlatformFragment(targetPlatform: CopyPlatform = this.plugin.settings.targetPlatform): Promise<{
 		fragment: string;
 		unresolvedImages: number;
 	}> {
-		const profile = this.plugin.getCurrentPlatformProfile();
+		const profile = PLATFORM_PROFILES[targetPlatform];
 		const embeddedImageFiles = this.resolveEmbeddedImageFiles();
 		const clone = this.sourceEl.cloneNode(true) as HTMLElement;
 		clone.classList.remove("obsidian-to-publish-source", "markdown-rendered");
@@ -1006,7 +1112,7 @@ class WeChatPreviewCopyView extends ItemView {
 		}
 
 		this.removeRenderedAttachmentOpenLinks(clone, embeddedImageFiles);
-		applyPlatformProfile(clone, this.plugin.settings.targetPlatform);
+		applyPlatformProfile(clone, targetPlatform);
 		this.removeRenderedAttachmentOpenLinks(clone, embeddedImageFiles);
 
 		const unresolvedImages = profile.capabilities.requiresRemoteImageUrl
@@ -1021,7 +1127,7 @@ class WeChatPreviewCopyView extends ItemView {
 		removeObsidianRuntimeAttributes(clone);
 
 		return {
-			fragment: wrapPlatformFragment(clone.innerHTML, this.plugin.settings.targetPlatform),
+			fragment: wrapPlatformFragment(clone.innerHTML, targetPlatform),
 			unresolvedImages
 		};
 	}
@@ -1289,6 +1395,149 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 					await this.plugin.refreshPreviewViews();
 				}));
 
+		containerEl.createEl("h3", { text: "微信公众号草稿箱" });
+
+		new Setting(containerEl)
+			.setName("启用微信官方 API")
+			.setDesc("使用微信公众号官方接口上传图片并创建草稿箱草稿。")
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.wechatOfficial.enabled)
+				.onChange(async (value) => {
+					this.plugin.settings.wechatOfficial.enabled = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("微信 AppID")
+			.setDesc("微信公众号后台的开发者 AppID。")
+			.addText((text) => text
+				.setPlaceholder("wx...")
+				.setValue(this.plugin.settings.wechatOfficial.appId)
+				.onChange(async (value) => {
+					this.plugin.settings.wechatOfficial.appId = value.trim();
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("微信 AppSecret")
+			.setDesc("仅保存在本地 Obsidian 插件设置中，不会写入发布包。")
+			.addText((text) => {
+				text
+					.setValue(this.plugin.settings.wechatOfficial.appSecret)
+					.onChange(async (value) => {
+						this.plugin.settings.wechatOfficial.appSecret = value.trim();
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.type = "password";
+			});
+
+		new Setting(containerEl)
+			.setName("作者")
+			.setDesc("写入微信草稿的 author 字段，可留空。")
+			.addText((text) => text
+				.setValue(this.plugin.settings.wechatOfficial.author)
+				.onChange(async (value) => {
+					this.plugin.settings.wechatOfficial.author = value.trim();
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("默认摘要")
+			.setDesc("留空时优先使用 frontmatter excerpt，否则使用默认同步说明。")
+			.addText((text) => text
+				.setValue(this.plugin.settings.wechatOfficial.digest)
+				.onChange(async (value) => {
+					this.plugin.settings.wechatOfficial.digest = value.trim();
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("原文链接")
+			.setDesc("写入微信草稿的 content_source_url，可留空。")
+			.addText((text) => text
+				.setPlaceholder("https://...")
+				.setValue(this.plugin.settings.wechatOfficial.contentSourceUrl)
+				.onChange(async (value) => {
+					this.plugin.settings.wechatOfficial.contentSourceUrl = value.trim();
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("开启留言")
+			.setDesc("同步为微信草稿字段 need_open_comment。")
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.wechatOfficial.openComment)
+				.onChange(async (value) => {
+					this.plugin.settings.wechatOfficial.openComment = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("仅粉丝可留言")
+			.setDesc("同步为微信草稿字段 only_fans_can_comment。")
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.wechatOfficial.onlyFansCanComment)
+				.onChange(async (value) => {
+					this.plugin.settings.wechatOfficial.onlyFansCanComment = value;
+					await this.plugin.saveSettings();
+				}));
+
+		containerEl.createEl("h3", { text: "飞书云文档" });
+
+		new Setting(containerEl)
+			.setName("启用飞书开放平台 API")
+			.setDesc("使用飞书自建应用把当前 Markdown 导入为新版云文档。")
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.feishuDocs.enabled)
+				.onChange(async (value) => {
+					this.plugin.settings.feishuDocs.enabled = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("飞书 AppID")
+			.setDesc("飞书开放平台自建应用的 AppID。")
+			.addText((text) => text
+				.setValue(this.plugin.settings.feishuDocs.appId)
+				.onChange(async (value) => {
+					this.plugin.settings.feishuDocs.appId = value.trim();
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("飞书 AppSecret")
+			.setDesc("仅保存在本地 Obsidian 插件设置中，不会写入发布包。")
+			.addText((text) => {
+				text
+					.setValue(this.plugin.settings.feishuDocs.appSecret)
+					.onChange(async (value) => {
+						this.plugin.settings.feishuDocs.appSecret = value.trim();
+						await this.plugin.saveSettings();
+					});
+				text.inputEl.type = "password";
+			});
+
+		new Setting(containerEl)
+			.setName("目标文件夹 Token 或 URL")
+			.setDesc("导入后的飞书云文档会创建在这个文件夹里；需把文件夹权限授予应用机器人。")
+			.addText((text) => text
+				.setPlaceholder("fld...")
+				.setValue(this.plugin.settings.feishuDocs.folderToken)
+				.onChange(async (value) => {
+					this.plugin.settings.feishuDocs.folderToken = value.trim();
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("转移所有者 User ID")
+			.setDesc("可选。填写后导入完成会尝试把文档所有者转给该 userid。")
+			.addText((text) => text
+				.setValue(this.plugin.settings.feishuDocs.ownerUserId)
+				.onChange(async (value) => {
+					this.plugin.settings.feishuDocs.ownerUserId = value.trim();
+					await this.plugin.saveSettings();
+				}));
+
 		containerEl.createEl("h3", { text: "Chrome 插件连接" });
 		const bridgeStatus = this.plugin.getChromeCompanionBridgeStatus();
 
@@ -1443,6 +1692,10 @@ function getChromeCompanionStatusView(status: ReturnType<WeChatPreviewCopyPlugin
 		tone: "connected",
 		detail: ` ${client}${version}，端口 ${status.port}。`
 	};
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+	return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1733,6 +1986,12 @@ function wrapHtmlDocument(fragment: string): string {
 		"</body>",
 		"</html>"
 	].join("");
+}
+
+function htmlFragmentToText(fragment: string): string {
+	const container = document.createElement("div");
+	container.innerHTML = fragment;
+	return container.innerText || container.textContent || "";
 }
 
 async function writePlatformClipboard(

@@ -120,10 +120,14 @@ export function collectArticleImageReferences(markdown: string): ImageReference[
 }
 
 function createPublishAsset(reference: ImageReference, resolved: ResolvedPublishImage, index: number): PublishAsset {
+	return createPublishAssetFromResolved(reference.src, resolved, index);
+}
+
+export function createPublishAssetFromResolved(originalSrc: string, resolved: ResolvedPublishImage, index: number): PublishAsset {
 	return {
 		id: `asset_${index}`,
 		kind: "image",
-		originalSrc: normalizeImageLink(reference.src),
+		originalSrc: normalizeImageLink(originalSrc),
 		fileName: resolved.fileName,
 		mime: resolved.mime,
 		bytes: resolved.data.byteLength,
@@ -240,4 +244,3 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 
 	return btoa(binary);
 }
-

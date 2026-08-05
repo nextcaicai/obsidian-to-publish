@@ -1,7 +1,10 @@
 import type { CopyPlatform } from "../platforms/types";
 import { normalizeImageLink } from "../rendering/image-links";
 import { parseArticleMetadata } from "./frontmatter";
-import { resolveArticleAssets } from "./assets";
+import {
+	createPublishAssetFromResolved,
+	resolveArticleAssets
+} from "./assets";
 import type {
 	PublishAsset,
 	PublishImageResolver,
@@ -31,7 +34,13 @@ export async function buildPublishPackageV1(options: BuildPublishPackageOptions)
 	const metadata = parseArticleMetadata(options.markdown, options.note.basename);
 	const assetResult = await resolveArticleAssets(metadata.body, options.resolveImage);
 	const warnings: PublishWarning[] = [...assetResult.warnings];
-	const cover = metadata.cover || assetResult.firstImageSrc || "";
+	const assets = [...assetResult.assets];
+	const cover = await resolvePublishCoverSource(
+		metadata.cover || assetResult.firstImageSrc || "",
+		assets,
+		options.resolveImage,
+		warnings
+	);
 
 	return {
 		version: 1,
@@ -50,10 +59,10 @@ export async function buildPublishPackageV1(options: BuildPublishPackageOptions)
 			html: options.html,
 			text: options.text,
 			...(metadata.excerpt ? { excerpt: metadata.excerpt } : {}),
-			...(cover ? { cover: resolveCoverSource(cover, assetResult.assets) } : {}),
+			...(cover ? { cover } : {}),
 			...(metadata.tags?.length ? { tags: metadata.tags } : {})
 		},
-		assets: assetResult.assets,
+		assets,
 		warnings,
 		options: {
 			openEditor: options.openEditor ?? true,
@@ -63,7 +72,12 @@ export async function buildPublishPackageV1(options: BuildPublishPackageOptions)
 	};
 }
 
-function resolveCoverSource(cover: string, assets: PublishAsset[]): string {
+async function resolvePublishCoverSource(
+	cover: string,
+	assets: PublishAsset[],
+	resolveImage: PublishImageResolver,
+	warnings: PublishWarning[]
+): Promise<string> {
 	const normalizedCover = cover.trim();
 	if (!normalizedCover) {
 		return "";
@@ -71,7 +85,31 @@ function resolveCoverSource(cover: string, assets: PublishAsset[]): string {
 
 	const normalizedLink = normalizeImageLink(normalizedCover);
 	const asset = assets.find((item) => normalizeImageLink(item.originalSrc) === normalizedLink);
-	return asset ? `asset://${asset.id}` : normalizedCover;
+	if (asset) {
+		return `asset://${asset.id}`;
+	}
+
+	if (isPortableCoverSource(normalizedLink)) {
+		return normalizedCover;
+	}
+
+	const resolved = await resolveImage(normalizedLink);
+	if (!resolved) {
+		warnings.push({
+			code: "cover_local_missing",
+			message: `封面图片未找到：${normalizedLink}`,
+			target: normalizedLink
+		});
+		return normalizedCover;
+	}
+
+	const coverAsset = createPublishAssetFromResolved(normalizedLink, resolved, assets.length + 1);
+	assets.push(coverAsset);
+	return `asset://${coverAsset.id}`;
+}
+
+function isPortableCoverSource(src: string): boolean {
+	return /^(?:https?:|data:image\/|asset:\/\/)/i.test(src);
 }
 
 function createPublishRequestId(): string {

@@ -173,4 +173,30 @@ describe("publish package", () => {
 
 		expect(pkg.article.cover).toBe("asset://asset_2");
 	});
+
+	it("resolves a frontmatter cover even when it is not in the body", async () => {
+		const pkg = await buildPublishPackageV1({
+			requestId: "pub_cover_only",
+			createdAt: "2026-08-04T00:00:00.000Z",
+			targets: ["wechat"],
+			note: {
+				path: "notes/post.md",
+				basename: "post"
+			},
+			markdown: [
+				"---",
+				"title: Cover only",
+				"cover: images/cover.png",
+				"---",
+				"正文"
+			].join("\n"),
+			html: "<section>正文</section>",
+			text: "正文",
+			resolveImage
+		});
+
+		expect(pkg.article.cover).toBe("asset://asset_1");
+		expect(pkg.assets).toHaveLength(1);
+		expect(pkg.assets[0].originalSrc).toBe("images/cover.png");
+	});
 });
