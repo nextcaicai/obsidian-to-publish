@@ -15,6 +15,14 @@ const proseMirrorTools = require("../../chrome-companion/src/page-prosemirror-co
 		doc: FakeDoc,
 		beforeCounts: Map<string, number>
 	) => { index: number; fingerprint: string; occurrence: number } | null;
+	findNewImageBlocks: (
+		doc: FakeDoc,
+		beforeCounts: Map<string, number>
+	) => Array<{ index: number; pos: number; fingerprint: string; occurrence: number }>;
+	buildImageDeduplicationPlan: (
+		imageBlocks: Array<{ index: number; pos: number }>,
+		markerPos: number
+	) => { keep: { index: number; pos: number } | null; remove: Array<{ index: number; pos: number }> };
 };
 
 type FakeNode = {
@@ -93,5 +101,18 @@ describe("Chrome companion editor block ordering", () => {
 
 		expect(added?.index).toBe(1);
 		expect(added?.occurrence).toBe(2);
+	});
+
+	it("removes the extra Xiaohongshu image created by one file paste", () => {
+		const before = proseMirrorTools.captureImageFingerprintCounts(imageDoc(["data:image/existing"]));
+		const added = proseMirrorTools.findNewImageBlocks(
+			imageDoc(["data:image/existing", "https://xiaohongshu/upload-a", "https://xiaohongshu/upload-b"]),
+			before
+		);
+		const plan = proseMirrorTools.buildImageDeduplicationPlan(added, 6);
+
+		expect(added.map((entry) => entry.index)).toEqual([1, 2]);
+		expect(plan.keep?.index).toBe(2);
+		expect(plan.remove.map((entry) => entry.index)).toEqual([1]);
 	});
 });

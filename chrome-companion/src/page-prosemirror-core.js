@@ -218,12 +218,51 @@
 	}
 
 	function findNewImageBlock(doc, beforeCounts) {
-		for (const entry of getTopLevelImageBlocks(doc)) {
-			if (entry.occurrence > (beforeCounts.get(entry.fingerprint) || 0)) {
-				return entry;
+		return findNewImageBlocks(doc, beforeCounts)[0] || null;
+	}
+
+	function findNewImageBlocks(doc, beforeCounts) {
+		return getTopLevelImageBlocks(doc).filter(
+			(entry) => entry.occurrence > (beforeCounts.get(entry.fingerprint) || 0)
+		);
+	}
+
+	function buildImageDeduplicationPlan(imageBlocks, markerPos) {
+		const ordered = Array.from(imageBlocks || []).sort((left, right) => left.pos - right.pos);
+		const beforeMarker = ordered.filter((entry) => entry.pos < markerPos);
+		const keep = beforeMarker[beforeMarker.length - 1] || ordered[0] || null;
+		return {
+			keep,
+			remove: keep ? ordered.filter((entry) => entry !== keep) : []
+		};
+	}
+
+	function deduplicateNewImageBlocksAtMarker(view, marker, beforeCounts) {
+		try {
+			const markerBlock = findMarkerBlock(view.state.doc, marker);
+			if (!markerBlock) {
+				return { ok: false, removed: 0 };
 			}
+			const plan = buildImageDeduplicationPlan(
+				findNewImageBlocks(view.state.doc, beforeCounts),
+				markerBlock.pos
+			);
+			if (!plan.keep) {
+				return { ok: false, removed: 0 };
+			}
+			if (plan.remove.length === 0) {
+				return { ok: true, removed: 0 };
+			}
+
+			let transaction = view.state.tr;
+			for (const entry of [...plan.remove].sort((left, right) => right.pos - left.pos)) {
+				transaction = transaction.delete(entry.pos, entry.pos + entry.node.nodeSize);
+			}
+			view.dispatch(transaction.scrollIntoView());
+			return { ok: true, removed: plan.remove.length };
+		} catch (_error) {
+			return { ok: false, removed: 0 };
 		}
-		return null;
 	}
 
 	function hasImageImmediatelyBeforeMarker(doc, marker, maxEmptyBlocks = 2) {
@@ -367,6 +406,9 @@
 		getTopLevelImageBlocks,
 		captureImageFingerprintCounts,
 		findNewImageBlock,
+		findNewImageBlocks,
+		buildImageDeduplicationPlan,
+		deduplicateNewImageBlocksAtMarker,
 		hasImageImmediatelyBeforeMarker,
 		removeMarker,
 		relocateImageBlockToMarker,

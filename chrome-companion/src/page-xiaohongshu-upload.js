@@ -1,6 +1,6 @@
 (function () {
-	const REQUEST_SOURCE = "OTP_COMPANION_XIAOHONGSHU_UPLOAD_REQUEST_V1";
-	const RESPONSE_SOURCE = "OTP_COMPANION_XIAOHONGSHU_UPLOAD_RESPONSE_V1";
+	const REQUEST_SOURCE = "OTP_COMPANION_XIAOHONGSHU_UPLOAD_REQUEST_V2";
+	const RESPONSE_SOURCE = "OTP_COMPANION_XIAOHONGSHU_UPLOAD_RESPONSE_V2";
 
 	window.addEventListener("message", (event) => {
 		if (event.source !== window || event.data?.source !== REQUEST_SOURCE) {
@@ -64,26 +64,39 @@
 			return { ok: false, placed: false, error: error?.message || "Image data was invalid." };
 		}
 
-		const beforeCount = core.getTopLevelImageBlocks(view.state.doc).length;
+		const beforeCounts = core.captureImageFingerprintCounts(view.state.doc);
 		await core.delay(60);
 		if (!core.dispatchFilePaste(root, file)) {
 			return { ok: false, placed: false, error: "Xiaohongshu rejected the image paste event." };
 		}
-		const uploadedView = await core.waitForValue(
-			() => {
-				const latestView = core.findEditorView(root) || view;
-				return core.getTopLevelImageBlocks(latestView.state.doc).length > beforeCount ? latestView : null;
-			},
+		const uploadedState = await waitForStableNewImages(
+			core,
+			root,
+			view,
+			beforeCounts,
 			options.imageUploadWaitMs || 60000,
-			300
+			options.imageSettleMs || 1400
 		);
-		if (!uploadedView) {
+		if (!uploadedState) {
 			return { ok: false, placed: false, error: "Xiaohongshu image upload timed out.", marker };
 		}
 
-		await core.delay(250);
-		const latestView = core.findEditorView(root) || uploadedView;
-		if (!core.hasImageImmediatelyBeforeMarker(latestView.state.doc, marker)) {
+		const latestView = core.findEditorView(root) || uploadedState.view;
+		const deduplication = core.deduplicateNewImageBlocksAtMarker(
+			latestView,
+			marker,
+			beforeCounts
+		);
+		if (!deduplication.ok) {
+			return {
+				ok: false,
+				placed: false,
+				error: "Xiaohongshu uploaded the image, but its duplicate blocks could not be resolved.",
+				marker
+			};
+		}
+		const cleanedView = core.findEditorView(root) || latestView;
+		if (!core.hasImageImmediatelyBeforeMarker(cleanedView.state.doc, marker)) {
 			return {
 				ok: false,
 				placed: false,
@@ -91,10 +104,45 @@
 				marker
 			};
 		}
-		const markerCleaned = core.removeMarker(latestView, marker);
+		const markerCleaned = core.removeMarker(cleanedView, marker);
 		return markerCleaned
-			? { ok: true, placed: true, markerCleaned: true, marker }
+			? {
+				ok: true,
+				placed: true,
+				markerCleaned: true,
+				duplicatesRemoved: deduplication.removed,
+				marker
+			}
 			: { ok: false, placed: false, markerCleaned: false, error: "Xiaohongshu marker cleanup failed.", marker };
+	}
+
+	async function waitForStableNewImages(core, root, fallbackView, beforeCounts, timeoutMs, settleMs) {
+		const startedAt = Date.now();
+		let signature = "";
+		let stableSince = 0;
+		let latestState = null;
+		while (Date.now() - startedAt < timeoutMs) {
+			const view = core.findEditorView(root) || fallbackView;
+			const imageBlocks = core.findNewImageBlocks(view.state.doc, beforeCounts);
+			if (imageBlocks.length === 0) {
+				signature = "";
+				stableSince = 0;
+				latestState = null;
+			} else {
+				const nextSignature = imageBlocks
+					.map((entry) => `${entry.fingerprint}:${entry.occurrence}:${entry.pos}`)
+					.join("|");
+				latestState = { view, imageBlocks };
+				if (nextSignature !== signature) {
+					signature = nextSignature;
+					stableSince = Date.now();
+				} else if (Date.now() - stableSince >= settleMs) {
+					return latestState;
+				}
+			}
+			await core.delay(250);
+		}
+		return null;
 	}
 
 	function postResponse(requestId, ok, uploads, started, error = "") {
