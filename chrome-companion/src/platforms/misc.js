@@ -18,15 +18,29 @@
 	];
 
 	for (const adapter of [
-		{ id: "xiaohongshu", hosts: ["creator.xiaohongshu.com"], bodyFormat: "plain-text" },
-		{ id: "bilibili", hosts: ["member.bilibili.com"], bodyFormat: "rich-html" },
+		{
+			id: "xiaohongshu",
+			hosts: ["creator.xiaohongshu.com"],
+			bodyFormat: "plain-text",
+			includeFilesInMainPaste: false,
+			pasteFilesAfterText: true,
+			stripAssetReferences: true
+		},
+		{
+			id: "bilibili",
+			hosts: ["member.bilibili.com"],
+			bodyFormat: "rich-html",
+			includeFilesInMainPaste: false,
+			pasteFilesAfterText: true,
+			stripAssetReferences: true
+		},
 		{ id: "zhishixingqiu", hosts: ["wx.zsxq.com"], bodyFormat: "rich-html" }
 	]) {
 		globalThis.OTPCompanion.registerPlatformAdapter({
 			...adapter,
 			preferPaste: true,
-			includeFilesInMainPaste: true,
-			pasteFilesAfterText: false,
+			includeFilesInMainPaste: adapter.includeFilesInMainPaste ?? true,
+			pasteFilesAfterText: adapter.pasteFilesAfterText ?? false,
 			autoInsertTimeoutMs: 90000,
 			titleSelectors: fallbackTitleSelectors,
 			bodySelectors: fallbackBodySelectors

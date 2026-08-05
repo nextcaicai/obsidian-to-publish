@@ -85,6 +85,7 @@
 			return insertMarkdownWithPageUploadedAssets(target, payload, adapter);
 		}
 
+		const fileCount = payload.files.length;
 		const mainPayload = adapter.includeFilesInMainPaste === false
 			? { ...payload, files: [] }
 			: payload;
@@ -100,9 +101,14 @@
 				html: "",
 				files: payload.files
 			});
+			const filePasteHandled = filePasteResult.handled && filePasteResult.fileIncluded;
 			return {
 				inserted: true,
-				imageIncluded: filePasteResult.fileIncluded || result.imageIncluded
+				imageDelivery: "paste",
+				imageIncluded: filePasteHandled || result.imageIncluded,
+				imageTotal: fileCount,
+				imageUploaded: filePasteHandled ? fileCount : 0,
+				imageFailed: filePasteHandled ? 0 : fileCount
 			};
 		}
 
@@ -917,16 +923,27 @@
 		const assetMap = buildAssetDataUriMap(publishPackage.assets || []);
 		const files = adapter.omitAssets ? [] : buildAssetFiles(publishPackage.assets || []);
 		const assetFilesById = buildAssetFileMap(publishPackage.assets || []);
-		const sourceMarkdown = adapter.omitAssets
+		const stripAssetReferences = adapter.stripAssetReferences === true;
+		const sourceMarkdown = adapter.omitAssets || stripAssetReferences
 			? removeMarkdownAssetImages(article.markdown || article.text || "")
 			: article.markdown || article.text || "";
 		const markdown = adapter.replaceAssetUrlsInMarkdown === false
 			? sourceMarkdown
 			: replaceAssetUrls(sourceMarkdown, assetMap);
-		const sourceHtml = adapter.omitAssets
+		const sourceHtml = adapter.omitAssets || stripAssetReferences
 			? removeImagesFromHtml(extractSafeHtmlFragment(article.html || ""))
 			: extractSafeHtmlFragment(article.html || "");
 		const html = replaceAssetUrls(sourceHtml, assetMap);
+
+		if (adapter.bodyFormat === "plain-text") {
+			return {
+				text: article.text || sourceMarkdown,
+				html: "",
+				files,
+				assetFilesById,
+				assets
+			};
+		}
 
 		if (adapter.bodyFormat !== "rich-html") {
 			return {
