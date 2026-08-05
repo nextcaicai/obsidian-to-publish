@@ -3,6 +3,7 @@
 	const AUTO_INSERT_TIMEOUT_MS = 20000;
 	const AUTO_INSERT_INTERVAL_MS = 700;
 	const adapters = [];
+	const uploadCachesByPlatform = new Map();
 
 	function registerPlatformAdapter(adapter) {
 		adapters.push(adapter);
@@ -27,7 +28,10 @@
 		return {
 			titleInserted,
 			bodyInserted: bodyResult.inserted,
-			imageIncluded: bodyResult.imageIncluded
+			imageIncluded: bodyResult.imageIncluded,
+			imageTotal: bodyResult.imageTotal || 0,
+			imageUploaded: bodyResult.imageUploaded || 0,
+			imageFailed: bodyResult.imageFailed || 0
 		};
 	}
 
@@ -151,8 +155,25 @@
 	}
 
 	async function insertMarkdownWithPageUploadedAssets(target, payload, adapter) {
-		const uploadPlan = buildMarkdownImageUploadPlan(payload.text, payload.assetFilesById);
-		if (uploadPlan.images.length === 0) {
+		const assetTools = globalThis.OTPCompanionAssets;
+		if (!assetTools?.uploadMarkdownAssets) {
+			return {
+				inserted: false,
+				imageIncluded: false
+			};
+		}
+
+		const uploadResult = await assetTools.uploadMarkdownAssets({
+			markdown: payload.text,
+			assets: payload.assets,
+			uploadAsset: (asset) => uploadAssetViaPageScript(asset, adapter),
+			cache: getUploadCache(adapter),
+			concurrency: adapter.uploadQueueConcurrency ?? 2,
+			retries: adapter.uploadQueueRetries ?? 2,
+			retryDelayMs: adapter.uploadQueueRetryDelayMs ?? 1000
+		});
+
+		if (uploadResult.images.length === 0) {
 			return insertIntoWritableElement(target, {
 				text: payload.text,
 				html: "",
@@ -164,33 +185,8 @@
 			});
 		}
 
-		const uniqueImages = [];
-		const seenAssetIds = new Set();
-		for (const item of uploadPlan.images) {
-			if (seenAssetIds.has(item.assetId)) {
-				continue;
-			}
-			seenAssetIds.add(item.assetId);
-			uniqueImages.push(item);
-		}
-
-		const uploadedImages = await uploadImagesViaPageScript(uniqueImages.map((item) => item.file), adapter);
-		const uploadByAssetId = new Map();
-		uploadedImages.forEach((uploaded, index) => {
-			if (uploaded?.url) {
-				uploadByAssetId.set(uniqueImages[index].assetId, uploaded.url);
-			}
-		});
-
-		const markdown = uploadPlan.markdownParts.map((part) => {
-			if (part.type === "text") {
-				return part.value;
-			}
-			const url = uploadByAssetId.get(part.assetId);
-			return url ? `![${part.alt}](${url})` : `[[OTP_IMAGE_${part.assetId}_UPLOAD_FAILED]]`;
-		}).join("");
 		const result = insertIntoWritableElement(target, {
-			text: markdown,
+			text: uploadResult.markdown,
 			html: "",
 			files: []
 		}, {
@@ -201,7 +197,10 @@
 
 		return {
 			inserted: result.inserted,
-			imageIncluded: uploadByAssetId.size > 0
+			imageIncluded: uploadResult.urlByAssetId.size > 0,
+			imageTotal: uploadResult.images.length,
+			imageUploaded: uploadResult.urlByAssetId.size,
+			imageFailed: uploadResult.uploads.filter((upload) => !upload.url).length
 		};
 	}
 
@@ -744,13 +743,31 @@
 	}
 
 	async function uploadImageBatchViaPageScript(files, adapter) {
-		const requestId = `otp-upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 		const assets = await Promise.all(files.map(fileToBase64Asset));
+		return uploadPageAssetsViaPageScript(assets, adapter, files.length);
+	}
+
+	async function uploadAssetViaPageScript(asset, adapter) {
+		if (!adapter.pageUploadScript || !asset?.base64) {
+			return null;
+		}
+
+		await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
+		const uploads = await uploadPageAssetsViaPageScript([{
+			name: asset.fileName || `${asset.id}.png`,
+			type: asset.mime || "image/png",
+			base64: asset.base64
+		}], adapter, 1);
+		return uploads[0] || null;
+	}
+
+	function uploadPageAssetsViaPageScript(assets, adapter, expectedCount) {
+		const requestId = `otp-upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 		return new Promise((resolve) => {
 			const timeout = window.setTimeout(() => {
 				window.removeEventListener("message", onMessage);
-				resolve(files.map(() => null));
-			}, adapter.pageUploadWaitMs ?? Math.max(adapter.imageUploadWaitMs ?? 12000, files.length * 15000));
+				resolve(new Array(expectedCount).fill(null));
+			}, adapter.pageUploadWaitMs ?? Math.max(adapter.imageUploadWaitMs ?? 12000, expectedCount * 15000));
 
 			function onMessage(event) {
 				if (event.source !== window
@@ -762,18 +779,18 @@
 				window.clearTimeout(timeout);
 				window.removeEventListener("message", onMessage);
 				if (!event.data.ok) {
-					console.warn("Juejin page upload failed.", event.data.error);
-					resolve(files.map(() => null));
+					console.warn(`${adapter.id || "platform"} page upload failed.`, event.data.error);
+					resolve(new Array(expectedCount).fill(null));
 					return;
 				}
 
 				const uploads = event.data.uploads || [];
 				for (const upload of uploads) {
 					if (upload?.error) {
-						console.warn("Juejin image upload failed.", upload.error);
+						console.warn(`${adapter.id || "platform"} image upload failed.`, upload.error);
 					}
 				}
-				resolve(files.map((_, index) => uploads[index] || null));
+				resolve(new Array(expectedCount).fill(null).map((_, index) => uploads[index] || null));
 			}
 
 			window.addEventListener("message", onMessage);
@@ -782,11 +799,20 @@
 				requestId,
 				assets,
 				options: {
+					...(adapter.pageUploadOptions || {}),
 					concurrency: adapter.pageUploadConcurrency ?? 2,
 					retries: adapter.pageUploadRetries ?? 2
 				}
 			}, window.location.origin);
 		});
+	}
+
+	function getUploadCache(adapter) {
+		const key = adapter.id || "default";
+		if (!uploadCachesByPlatform.has(key)) {
+			uploadCachesByPlatform.set(key, new Map());
+		}
+		return uploadCachesByPlatform.get(key);
 	}
 
 	function injectPageScript(scriptPath, version = "v1") {
@@ -841,6 +867,7 @@
 	function buildDraftPayload(task, adapter) {
 		const publishPackage = task.package || {};
 		const article = publishPackage.article || {};
+		const assets = Array.isArray(publishPackage.assets) ? publishPackage.assets : [];
 		const assetMap = buildAssetDataUriMap(publishPackage.assets || []);
 		const files = adapter.omitAssets ? [] : buildAssetFiles(publishPackage.assets || []);
 		const assetFilesById = buildAssetFileMap(publishPackage.assets || []);
@@ -860,7 +887,8 @@
 				text: markdown,
 				html: "",
 				files,
-				assetFilesById
+				assetFilesById,
+				assets
 			};
 		}
 
@@ -868,7 +896,8 @@
 			text: article.text || markdown,
 			html,
 			files,
-			assetFilesById
+			assetFilesById,
+			assets
 		};
 	}
 

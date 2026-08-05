@@ -12,9 +12,11 @@
 		pageUploadScriptVersion: "v3",
 		pageUploadRequestSource: "OTP_COMPANION_JUEJIN_UPLOAD_REQUEST_V3",
 		pageUploadResponseSource: "OTP_COMPANION_JUEJIN_UPLOAD_RESPONSE_V3",
-		pageUploadBatchSize: 4,
 		pageUploadConcurrency: 2,
 		pageUploadRetries: 2,
+		uploadQueueConcurrency: 2,
+		uploadQueueRetries: 2,
+		uploadQueueRetryDelayMs: 1200,
 		uploadImagesViaFileInput: true,
 		clickUploadButtonBeforeInput: true,
 		uploadInputSelectors: [

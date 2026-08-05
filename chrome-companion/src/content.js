@@ -138,7 +138,7 @@ async function autoInsertDraft(task, adapter, panel) {
 }
 
 function getInsertResultMessage(result) {
-	const imageSuffix = result.imageIncluded ? "，图片已随粘贴数据发送" : "";
+	const imageSuffix = getImageResultSuffix(result);
 	if (result.titleInserted && result.bodyInserted) {
 		return `已尝试写入标题和正文${imageSuffix}。`;
 	}
@@ -152,4 +152,16 @@ function getInsertResultMessage(result) {
 	}
 
 	return "未找到可写入的编辑区域，请先点击正文编辑器后重试。";
+}
+
+function getImageResultSuffix(result) {
+	if (!result.imageTotal) {
+		return result.imageIncluded ? "，图片已随粘贴数据发送" : "";
+	}
+
+	if (result.imageFailed > 0) {
+		return `，图片已上传 ${result.imageUploaded}/${result.imageTotal}，失败处已保留标记`;
+	}
+
+	return `，图片已上传 ${result.imageUploaded}/${result.imageTotal}`;
 }
