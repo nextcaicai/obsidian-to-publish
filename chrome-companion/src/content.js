@@ -167,6 +167,14 @@ function getImageResultSuffix(result) {
 		return `，图片已随粘贴数据发送 ${result.imageUploaded}/${result.imageTotal}`;
 	}
 
+	if (result.imageDelivery === "page-marker-upload") {
+		if (result.imageFailed > 0) {
+			return `，图片已按正文位置上传 ${result.imageUploaded}/${result.imageTotal}，失败图片需手动处理`;
+		}
+
+		return `，图片已按正文位置上传 ${result.imageUploaded}/${result.imageTotal}`;
+	}
+
 	if (result.imageFailed > 0) {
 		return `，图片已上传 ${result.imageUploaded}/${result.imageTotal}，失败处已保留标记`;
 	}

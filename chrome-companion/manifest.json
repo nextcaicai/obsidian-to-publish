@@ -60,6 +60,15 @@
 	"web_accessible_resources": [
 		{
 			"resources": [
+				"src/page-x-upload.js"
+			],
+			"matches": [
+				"https://x.com/*",
+				"https://twitter.com/*"
+			]
+		},
+		{
+			"resources": [
 				"src/page-juejin-upload.js"
 			],
 			"matches": [

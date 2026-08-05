@@ -85,6 +85,10 @@
 			return insertMarkdownWithPageUploadedAssets(target, payload, adapter);
 		}
 
+		if (adapter.insertMode === "markdown-page-upload-markers") {
+			return insertMarkdownWithPageUploadedMarkers(target, payload, adapter);
+		}
+
 		const fileCount = payload.files.length;
 		const mainPayload = adapter.includeFilesInMainPaste === false
 			? { ...payload, files: [] }
@@ -207,6 +211,52 @@
 			imageTotal: uploadResult.images.length,
 			imageUploaded: uploadResult.urlByAssetId.size,
 			imageFailed: uploadResult.uploads.filter((upload) => !upload.url).length
+		};
+	}
+
+	async function insertMarkdownWithPageUploadedMarkers(target, payload, adapter) {
+		const markerPlan = buildMarkdownAssetMarkerPlan(payload.text, payload.assets);
+		const textResult = insertIntoWritableElement(target, {
+			text: markerPlan.markdown,
+			html: "",
+			files: []
+		}, {
+			allowHtml: false,
+			preferPaste: adapter.preferPaste !== false,
+			replaceExisting: false
+		});
+		if (!textResult.inserted) {
+			return {
+				inserted: false,
+				imageIncluded: false
+			};
+		}
+
+		if (markerPlan.images.length === 0) {
+			return {
+				inserted: true,
+				imageIncluded: false
+			};
+		}
+
+		let uploaded = 0;
+		let failed = 0;
+		for (const image of markerPlan.images) {
+			const upload = await uploadAssetToMarkerViaPageScript(image.asset, image.marker, adapter);
+			if (upload?.ok || upload?.url || upload?.placed) {
+				uploaded += 1;
+			} else {
+				failed += 1;
+			}
+		}
+
+		return {
+			inserted: true,
+			imageDelivery: "page-marker-upload",
+			imageIncluded: uploaded > 0,
+			imageTotal: markerPlan.images.length,
+			imageUploaded: uploaded,
+			imageFailed: failed
 		};
 	}
 
@@ -641,6 +691,10 @@
 		return name.replace(/\.[^.]+$/, "").replace(/[\]\n\r]/g, " ").trim() || "image";
 	}
 
+	function sanitizeImageAlt(value) {
+		return String(value || "image").replace(/[\]\n\r]/g, " ").trim() || "image";
+	}
+
 	async function uploadImageViaFileInput(file, adapter) {
 		const input = await findImageUploadInput(adapter);
 		if (!input) {
@@ -773,6 +827,23 @@
 			name: asset.fileName || `${asset.id}.png`,
 			type: asset.mime || "image/png",
 			base64: asset.base64
+		}], adapter, 1);
+		return uploads[0] || null;
+	}
+
+	async function uploadAssetToMarkerViaPageScript(asset, marker, adapter) {
+		if (!adapter.pageUploadScript || !asset?.base64 || !marker) {
+			return null;
+		}
+
+		await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
+		const uploads = await uploadPageAssetsViaPageScript([{
+			name: asset.fileName || `${asset.id}.png`,
+			type: asset.mime || "image/png",
+			base64: asset.base64,
+			marker,
+			assetId: asset.id || "",
+			alt: asset.fileName || ""
 		}], adapter, 1);
 		return uploads[0] || null;
 	}
@@ -925,7 +996,7 @@
 		const assetFilesById = buildAssetFileMap(publishPackage.assets || []);
 		const stripAssetReferences = adapter.stripAssetReferences === true;
 		const sourceMarkdown = adapter.omitAssets || stripAssetReferences
-			? removeMarkdownAssetImages(article.markdown || article.text || "")
+			? removeUnportableMarkdownImages(article.markdown || article.text || "")
 			: article.markdown || article.text || "";
 		const markdown = adapter.replaceAssetUrlsInMarkdown === false
 			? sourceMarkdown
@@ -934,10 +1005,13 @@
 			? removeImagesFromHtml(extractSafeHtmlFragment(article.html || ""))
 			: extractSafeHtmlFragment(article.html || "");
 		const html = replaceAssetUrls(sourceHtml, assetMap);
+		const text = adapter.omitAssets || stripAssetReferences
+			? removeUnportableMarkdownImages(article.text || sourceMarkdown)
+			: article.text || markdown;
 
 		if (adapter.bodyFormat === "plain-text") {
 			return {
-				text: article.text || sourceMarkdown,
+				text,
 				html: "",
 				files,
 				assetFilesById,
@@ -956,7 +1030,7 @@
 		}
 
 		return {
-			text: article.text || markdown,
+			text,
 			html,
 			files,
 			assetFilesById,
@@ -968,6 +1042,12 @@
 		return String(markdown || "")
 			.replace(/^\s*!\[[^\]]*]\(asset:\/\/[a-zA-Z0-9_-]+\)\s*$/gm, "")
 			.replace(/!\[[^\]]*]\(asset:\/\/[a-zA-Z0-9_-]+\)/g, "");
+	}
+
+	function removeUnportableMarkdownImages(markdown) {
+		return String(markdown || "")
+			.replace(/^\s*!\[[^\]]*]\((?:asset:\/\/[a-zA-Z0-9_-]+|data:image\/[^)]+)\)\s*$/gim, "")
+			.replace(/!\[[^\]]*]\((?:asset:\/\/[a-zA-Z0-9_-]+|data:image\/[^)]+)\)/gi, "");
 	}
 
 	function removeImagesFromHtml(html) {
@@ -1120,6 +1200,38 @@
 		return {
 			images,
 			markdownParts
+		};
+	}
+
+	function buildMarkdownAssetMarkerPlan(markdown, assets = []) {
+		const byId = new Map();
+		for (const asset of Array.isArray(assets) ? assets : []) {
+			if (asset?.kind === "image" && asset.id && asset.base64) {
+				byId.set(String(asset.id), asset);
+			}
+		}
+
+		const images = [];
+		const pattern = /!\[([^\]]*)]\(asset:\/\/([a-zA-Z0-9_-]+)\)/g;
+		const output = String(markdown || "").replace(pattern, (match, alt, assetId) => {
+			const asset = byId.get(assetId);
+			if (!asset) {
+				return match;
+			}
+
+			const marker = `[[OTP_IMAGE_${assetId}_${images.length + 1}]]`;
+			images.push({
+				asset,
+				assetId,
+				marker,
+				alt: sanitizeImageAlt(alt || asset.fileName)
+			});
+			return marker;
+		});
+
+		return {
+			markdown: output,
+			images
 		};
 	}
 
