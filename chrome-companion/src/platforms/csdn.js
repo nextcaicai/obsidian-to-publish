@@ -32,6 +32,11 @@
 		markerWaitMs: 8000,
 		markerPollMs: 300,
 		titleClickText: ["请输入文章标题", "请输入标题", "【无标题】", "无标题"],
+		titleActivationSelectors: [
+			".article-bar__title-display",
+			".article-bar__input-box"
+		],
+		titleActivationWaitMs: 2500,
 		titleSelectors: [
 			"input[placeholder*='请输入文章标题']",
 			"textarea[placeholder*='请输入文章标题']",

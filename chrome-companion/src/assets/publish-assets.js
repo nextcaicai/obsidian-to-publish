@@ -165,6 +165,41 @@
 		});
 	}
 
+	function buildHtmlAssetMarkerPlan(html, assets = []) {
+		const imageAssets = (Array.isArray(assets) ? assets : [])
+			.filter((asset) => asset?.kind === "image" && asset.id && asset.base64);
+		const images = [];
+		let assetIndex = 0;
+		const output = String(html || "").replace(/<img\b[^>]*>/gi, (imageTag) => {
+			const srcMatch = imageTag.match(/\bsrc\s*=\s*(["'])(.*?)\1/i)
+				|| imageTag.match(/\bsrc\s*=\s*([^\s>]+)/i);
+			const src = String(srcMatch?.[2] || srcMatch?.[1] || "").trim();
+			if (/^https?:\/\//i.test(src)) {
+				return imageTag;
+			}
+
+			const asset = imageAssets[assetIndex];
+			if (!asset) {
+				return imageTag;
+			}
+
+			assetIndex += 1;
+			const marker = `[[OTP_IMAGE_${asset.id}_${assetIndex}]]`;
+			images.push({
+				asset,
+				assetId: asset.id,
+				marker,
+				alt: sanitizeImageAlt(asset.fileName)
+			});
+			return marker;
+		});
+
+		return {
+			html: output,
+			images
+		};
+	}
+
 	async function pMap(items, mapper, concurrency = DEFAULT_CONCURRENCY) {
 		const normalizedConcurrency = Math.max(1, Math.floor(Number(concurrency) || DEFAULT_CONCURRENCY));
 		const results = new Array(items.length);
@@ -235,6 +270,7 @@
 
 	const api = {
 		assetToFile,
+		buildHtmlAssetMarkerPlan,
 		collectMarkdownAssetImages,
 		createAssetStore,
 		pMap,

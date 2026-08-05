@@ -3,10 +3,19 @@
 		id: "zhihu",
 		hosts: ["www.zhihu.com", "zhuanlan.zhihu.com"],
 		bodyFormat: "rich-html",
+		insertMode: "rich-html-placeholder-assets",
 		preferPaste: true,
-		includeFilesInMainPaste: true,
+		includeFilesInMainPaste: false,
 		pasteFilesAfterText: false,
-		omitAssets: true,
+		uploadImagesViaFileInput: true,
+		uploadInputSelectors: [
+			".PostEditor-wrapper input[type='file'][accept^='image/']:not(.UploadPicture-input)",
+			".PostEditor input[type='file'][accept^='image/']:not(.UploadPicture-input)"
+		],
+		uploadInputExcludeClosestSelectors: [".UploadPicture-wrapper"],
+		imageUploadWaitMs: 60000,
+		markerWaitMs: 10000,
+		markerPollMs: 300,
 		titleSelectors: [
 			"textarea[placeholder*='标题']",
 			"input[placeholder*='标题']",

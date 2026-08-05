@@ -6,6 +6,12 @@ async function initCompanionPanel() {
 	if (!adapter) {
 		return;
 	}
+	if (window.top !== window && adapter.frameScope !== "child") {
+		return;
+	}
+	if (window.top === window && adapter.frameScope === "child") {
+		return;
+	}
 
 	const response = await chrome.runtime.sendMessage({ type: "task.getLatest" });
 	const task = response?.task;
@@ -173,6 +179,14 @@ function getImageResultSuffix(result) {
 		}
 
 		return `，图片已按正文位置上传 ${result.imageUploaded}/${result.imageTotal}`;
+	}
+
+	if (result.imageDelivery === "editor-file-input" || result.imageDelivery === "editor-position-paste") {
+		if (result.imageFailed > 0) {
+			return `，图片已按正文位置插入 ${result.imageUploaded}/${result.imageTotal}，失败位置已保留提示`;
+		}
+
+		return `，图片已按正文位置插入 ${result.imageUploaded}/${result.imageTotal}`;
 	}
 
 	if (result.imageFailed > 0) {

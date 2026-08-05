@@ -22,28 +22,38 @@
 	async function insertDraftWithAdapter(task, adapter, options = {}) {
 		const title = task.package?.article?.title || "";
 		const payload = buildDraftPayload(task, adapter);
-		const titleInserted = options.skipTitle ? false : tryInsertTitle(title, adapter);
+		const titleInserted = options.skipTitle ? false : await tryInsertTitle(title, adapter);
 		const bodyResult = await tryInsertBody(payload, adapter);
 
 		return {
 			titleInserted,
 			bodyInserted: bodyResult.inserted,
 			imageIncluded: bodyResult.imageIncluded,
+			imageDelivery: bodyResult.imageDelivery,
 			imageTotal: bodyResult.imageTotal || 0,
 			imageUploaded: bodyResult.imageUploaded || 0,
 			imageFailed: bodyResult.imageFailed || 0
 		};
 	}
 
-	function tryInsertTitle(title, adapter) {
+	async function tryInsertTitle(title, adapter) {
 		if (!title.trim()) {
 			return false;
 		}
 
-		const target = findTitleWritableElement(adapter);
+		let target = findTitleWritableElement(adapter);
 		if (!target) {
-			clickPotentialTitlePlaceholder(adapter);
-			return false;
+			if (!clickPotentialTitlePlaceholder(adapter)) {
+				return false;
+			}
+			target = await waitForValue(
+				() => findTitleWritableElement(adapter),
+				adapter.titleActivationWaitMs ?? 1800,
+				adapter.titleActivationPollMs ?? 100
+			);
+			if (!target) {
+				return false;
+			}
 		}
 
 		return insertIntoWritableElement(target, {
@@ -79,6 +89,10 @@
 
 		if (adapter.insertMode === "markdown-placeholder-assets") {
 			return insertMarkdownWithImageMarkers(target, payload, adapter);
+		}
+
+		if (adapter.insertMode === "rich-html-placeholder-assets") {
+			return insertRichHtmlWithImageMarkers(target, payload, adapter);
 		}
 
 		if (adapter.insertMode === "markdown-page-upload-assets") {
@@ -216,6 +230,9 @@
 
 	async function insertMarkdownWithPageUploadedMarkers(target, payload, adapter) {
 		const markerPlan = buildMarkdownAssetMarkerPlan(payload.text, payload.assets);
+		if (adapter.pageScriptWritesBody) {
+			return insertMarkdownAndAssetsViaPageScript(markerPlan, adapter);
+		}
 		const textResult = insertIntoWritableElement(target, {
 			text: markerPlan.markdown,
 			html: "",
@@ -258,6 +275,106 @@
 			imageUploaded: uploaded,
 			imageFailed: failed
 		};
+	}
+
+	async function insertRichHtmlWithImageMarkers(target, payload, adapter) {
+		const assetTools = globalThis.OTPCompanionAssets;
+		if (!assetTools?.buildHtmlAssetMarkerPlan) {
+			return {
+				inserted: false,
+				imageIncluded: false
+			};
+		}
+
+		const markerPlan = assetTools.buildHtmlAssetMarkerPlan(payload.html, payload.assets);
+		const textResult = insertIntoWritableElement(target, {
+			text: getPlainTextFromHtml(markerPlan.html),
+			html: markerPlan.html,
+			files: []
+		}, {
+			allowHtml: true,
+			preferPaste: adapter.preferPaste !== false,
+			replaceExisting: false
+		});
+		if (!textResult.inserted) {
+			return {
+				inserted: false,
+				imageIncluded: false
+			};
+		}
+
+		let uploaded = 0;
+		let failed = 0;
+		for (const image of markerPlan.images) {
+			const markerReady = await waitForCondition(
+				() => getWritableText(target).includes(image.marker),
+				adapter.markerWaitMs ?? 8000,
+				adapter.markerPollMs ?? 250
+			);
+			if (!markerReady || !replaceTextInWritable(target, image.marker, "")) {
+				failed += 1;
+				continue;
+			}
+
+			const file = assetToFile(image.asset);
+			if (!file) {
+				failed += 1;
+				continue;
+			}
+
+			const beforeImageCount = countEditorImages(target);
+			let uploadStarted = false;
+			if (adapter.uploadImagesViaFileInput) {
+				uploadStarted = await uploadImageViaFileInput(file, adapter);
+			} else {
+				const pasteResult = dispatchPasteEvent(target, {
+					text: "",
+					html: "",
+					files: [file]
+				});
+				uploadStarted = pasteResult.fileIncluded;
+			}
+
+			const imageInserted = uploadStarted && await waitForCondition(
+				() => countEditorImages(target) > beforeImageCount,
+				adapter.imageUploadWaitMs ?? 30000,
+				adapter.markerPollMs ?? 250
+			);
+			if (imageInserted) {
+				uploaded += 1;
+			} else {
+				failed += 1;
+				insertIntoWritableElement(target, {
+					text: `[图片上传失败：${image.alt}]`,
+					html: "",
+					files: []
+				}, {
+					allowHtml: false,
+					preferPaste: false,
+					replaceExisting: false
+				});
+			}
+			await delay(adapter.filePasteDelayMs ?? 900);
+		}
+
+		return {
+			inserted: true,
+			imageDelivery: adapter.uploadImagesViaFileInput ? "editor-file-input" : "editor-position-paste",
+			imageIncluded: uploaded > 0,
+			imageTotal: markerPlan.images.length,
+			imageUploaded: uploaded,
+			imageFailed: failed
+		};
+	}
+
+	function getPlainTextFromHtml(html) {
+		const template = document.createElement("template");
+		template.innerHTML = String(html || "");
+		return template.content.textContent || "";
+	}
+
+	function countEditorImages(target) {
+		return target.querySelectorAll?.("img").length || 0;
 	}
 
 	async function uploadAssetThroughAdapter(target, asset, adapter) {
@@ -488,11 +605,11 @@
 		selection.addRange(range);
 	}
 
-	function dispatchInputEvent(target, text) {
+	function dispatchInputEvent(target, text, inputType = "insertText") {
 		target.dispatchEvent(new InputEvent("input", {
 			bubbles: true,
 			cancelable: true,
-			inputType: "insertText",
+			inputType,
 			data: text
 		}));
 		target.dispatchEvent(new Event("change", {
@@ -544,9 +661,11 @@
 			return true;
 		}
 
-		const inserted = document.execCommand("insertText", false, replacement);
+		const inserted = replacement
+			? document.execCommand("insertText", false, replacement)
+			: document.execCommand("delete", false);
 		if (inserted) {
-			dispatchInputEvent(target, replacement);
+			dispatchInputEvent(target, replacement, replacement ? "insertText" : "deleteContentBackward");
 		}
 		return inserted;
 	}
@@ -928,6 +1047,78 @@
 				}
 			}, window.location.origin);
 		});
+	}
+
+	async function insertMarkdownAndAssetsViaPageScript(markerPlan, adapter) {
+		if (!adapter.pageUploadScript) {
+			return {
+				inserted: false,
+				imageIncluded: false
+			};
+		}
+
+		await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
+		const requestId = `otp-write-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+		const assets = markerPlan.images.map((image) => ({
+			name: image.asset.fileName || `${image.asset.id}.png`,
+			type: image.asset.mime || "image/png",
+			base64: image.asset.base64,
+			marker: image.marker,
+			assetId: image.asset.id || "",
+			alt: image.alt || image.asset.fileName || ""
+		}));
+
+		const response = await new Promise((resolve) => {
+			const expectedCount = assets.length;
+			const timeout = window.setTimeout(() => {
+				window.removeEventListener("message", onMessage);
+				resolve({
+					ok: false,
+					bodyWritten: false,
+					uploads: new Array(expectedCount).fill(null)
+				});
+			}, adapter.pageUploadWaitMs ?? Math.max(adapter.imageUploadWaitMs ?? 12000, expectedCount * 60000));
+
+			function onMessage(event) {
+				if (event.source !== window
+					|| event.data?.source !== adapter.pageUploadResponseSource
+					|| event.data.requestId !== requestId) {
+					return;
+				}
+
+				window.clearTimeout(timeout);
+				window.removeEventListener("message", onMessage);
+				resolve(event.data);
+			}
+
+			window.addEventListener("message", onMessage);
+			window.postMessage({
+				source: adapter.pageUploadRequestSource,
+				requestId,
+				markdown: markerPlan.markdown,
+				assets,
+				options: {
+					...(adapter.pageUploadOptions || {}),
+					imageUploadWaitMs: adapter.imageUploadWaitMs ?? 90000
+				}
+			}, window.location.origin);
+		});
+
+		const uploads = Array.isArray(response?.uploads) ? response.uploads : [];
+		for (const upload of uploads) {
+			if (upload?.error) {
+				console.warn(`${adapter.id || "platform"} image upload failed.`, upload.error);
+			}
+		}
+		const uploaded = uploads.filter((upload) => upload?.ok || upload?.url || upload?.placed).length;
+		return {
+			inserted: response?.bodyWritten === true,
+			imageDelivery: "page-marker-upload",
+			imageIncluded: uploaded > 0,
+			imageTotal: assets.length,
+			imageUploaded: uploaded,
+			imageFailed: Math.max(0, assets.length - uploaded)
+		};
 	}
 
 	function getUploadCache(adapter) {
@@ -1526,9 +1717,20 @@
 	}
 
 	function clickPotentialTitlePlaceholder(adapter) {
+		for (const selector of adapter.titleActivationSelectors || []) {
+			for (const element of Array.from(document.querySelectorAll(selector))) {
+				if (element instanceof HTMLElement && isVisibleElement(element)) {
+					element.click();
+					return true;
+				}
+			}
+		}
+
 		for (const label of adapter.titleClickText || []) {
 			const element = Array.from(document.querySelectorAll("h1,h2,header div,header span,div,span"))
-				.find((candidate) => candidate.textContent?.trim() === label);
+				.find((candidate) => candidate instanceof HTMLElement
+					&& isVisibleElement(candidate)
+					&& candidate.textContent?.trim() === label);
 			if (element instanceof HTMLElement) {
 				element.click();
 				return true;

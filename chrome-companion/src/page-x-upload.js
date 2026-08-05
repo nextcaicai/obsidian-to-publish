@@ -19,16 +19,60 @@
 	async function handleUploadRequest(message) {
 		const assets = Array.isArray(message.assets) ? message.assets : [];
 		const options = message.options || {};
+		let bodyWritten = false;
+		if (typeof message.markdown === "string") {
+			const draftNode = await waitForValue(
+				() => findDraftStateNode(),
+				options.editorWaitMs || 8000,
+				150
+			);
+			if (!draftNode) {
+				postResponse(message.requestId, false, [], false, "X article editor was not reachable.");
+				return;
+			}
+
+			const writableNode = await ensureDraftCharacterSample(draftNode);
+			const writeResult = writeDraftMarkdown(writableNode, message.markdown);
+			if (!writeResult.ok) {
+				postResponse(message.requestId, false, [], false, writeResult.error);
+				return;
+			}
+			bodyWritten = true;
+
+			const markers = assets.map((asset) => String(asset?.marker || "")).filter(Boolean);
+			if (markers.length > 0) {
+				const markersReady = await waitForCondition(
+					() => {
+						const latestNode = findDraftStateNode();
+						const content = latestNode?.props?.editorState?.getCurrentContent?.();
+						return Boolean(content) && markers.every((marker) => findMarkerLocation(content, marker));
+					},
+					options.markerWaitMs || 5000,
+					150
+				);
+				if (!markersReady) {
+					postResponse(message.requestId, false, [], true, "X image markers did not reach the Draft.js editor state.");
+					return;
+				}
+			}
+		}
+
 		const uploads = [];
 		for (const asset of assets) {
 			uploads.push(await uploadAssetAtMarker(asset, options));
 		}
 
+		postResponse(message.requestId, true, uploads, bodyWritten);
+	}
+
+	function postResponse(requestId, ok, uploads, bodyWritten, error = "") {
 		window.postMessage({
 			source: RESPONSE_SOURCE,
-			requestId: message.requestId,
-			ok: true,
-			uploads
+			requestId,
+			ok,
+			uploads,
+			bodyWritten,
+			...(error ? { error } : {})
 		}, window.location.origin);
 	}
 
@@ -135,6 +179,98 @@
 			fiber = fiber.return;
 		}
 		return null;
+	}
+
+	function findDraftCharacterSample(draftNode) {
+		const blockMap = draftNode?.props?.editorState?.getCurrentContent?.()?.getBlockMap?.();
+		if (!blockMap?.forEach) {
+			return null;
+		}
+
+		let sample = null;
+		blockMap.forEach((block) => {
+			if (sample) {
+				return;
+			}
+			const characterList = block?.getCharacterList?.();
+			const size = typeof characterList?.size === "number" ? characterList.size : 0;
+			for (let index = 0; index < size; index += 1) {
+				const character = characterList.get?.(index);
+				if (character?.set && character?.getStyle) {
+					sample = { block, character };
+					break;
+				}
+			}
+		});
+		return sample;
+	}
+
+	async function ensureDraftCharacterSample(draftNode) {
+		if (findDraftCharacterSample(draftNode)) {
+			return draftNode;
+		}
+
+		const editor = findEditorElement();
+		if (!editor) {
+			return draftNode;
+		}
+		editor.focus();
+		document.execCommand("insertText", false, "x");
+		return await waitForValue(() => {
+			const latestNode = findDraftStateNode() || draftNode;
+			return findDraftCharacterSample(latestNode) ? latestNode : null;
+		}, 1800, 80) || draftNode;
+	}
+
+	function writeDraftMarkdown(draftNode, markdown) {
+		const sample = findDraftCharacterSample(draftNode);
+		if (!sample) {
+			return { ok: false, error: "X Draft.js character metadata was not reachable." };
+		}
+
+		const editorState = draftNode.props.editorState;
+		const EditorState = editorState.constructor;
+		const SelectionState = editorState.getSelection().constructor;
+		const contentState = editorState.getCurrentContent();
+		const BlockMap = contentState.getBlockMap().constructor;
+		const CharacterList = sample.block.getCharacterList().constructor;
+		let nextBlockMap = BlockMap();
+		let lastKey = "";
+		const lines = String(markdown || "").split(/\r?\n/);
+
+		for (let index = 0; index < Math.max(1, lines.length); index += 1) {
+			const text = lines[index] || "";
+			const key = `${Math.random().toString(36).slice(2, 7)}${index.toString(36)}`;
+			let characterList = CharacterList();
+			const emptyStyle = sample.character.getStyle().clear();
+			for (let charIndex = 0; charIndex < text.length; charIndex += 1) {
+				characterList = characterList.push(sample.character.set("style", emptyStyle).set("entity", null));
+			}
+			const block = sample.block.merge({
+				key,
+				type: "unstyled",
+				text,
+				characterList,
+				depth: 0,
+				data: sample.block.getData?.()?.clear?.() || sample.block.getData?.()
+			});
+			nextBlockMap = nextBlockMap.set(key, block);
+			lastKey = key;
+		}
+
+		if (!lastKey) {
+			return { ok: false, error: "X article body was empty." };
+		}
+
+		const selection = SelectionState.createEmpty(lastKey);
+		const nextContent = contentState
+			.set("blockMap", nextBlockMap)
+			.set("selectionBefore", selection)
+			.set("selectionAfter", selection);
+		let nextEditorState = EditorState.push(editorState, nextContent, "insert-fragment");
+		nextEditorState = EditorState.moveSelectionToEnd(nextEditorState);
+		draftNode.props.onChange(nextEditorState);
+		return { ok: true };
 	}
 
 	function findOnFilesAdded() {

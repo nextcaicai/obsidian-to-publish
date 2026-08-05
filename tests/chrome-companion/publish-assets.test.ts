@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
 const assetTools = require("../../chrome-companion/src/assets/publish-assets.js") as {
+	buildHtmlAssetMarkerPlan: (html: string, assets: PublishAsset[]) => {
+		html: string;
+		images: Array<{ assetId: string; marker: string }>;
+	};
 	uploadMarkdownAssets: (input: {
 		markdown: string;
 		assets: PublishAsset[];
@@ -119,5 +123,24 @@ describe("Chrome companion publish assets", () => {
 		expect(uploadAsset).toHaveBeenCalledTimes(1);
 		expect(first.markdown).toBe("![A](https://cdn.example.com/uploaded.png)");
 		expect(second.markdown).toBe("![A](https://cdn.example.com/uploaded.png)");
+	});
+
+	it("replaces local HTML images with ordered markers and keeps remote images", () => {
+		const result = assetTools.buildHtmlAssetMarkerPlan([
+			"<p>Before</p>",
+			'<p><img src="data:image/png;base64,one"></p>',
+			"<p>Middle</p>",
+			'<p><img src="app://local/body.png"></p>',
+			'<p><img src="https://example.com/remote.png"></p>',
+			"<p>After</p>"
+		].join(""), [
+			imageAsset("asset_1", "one"),
+			imageAsset("asset_2", "two")
+		]);
+
+		expect(result.html).toContain("<p>Before</p><p>[[OTP_IMAGE_asset_1_1]]</p>");
+		expect(result.html).toContain("<p>Middle</p><p>[[OTP_IMAGE_asset_2_2]]</p>");
+		expect(result.html).toContain('src="https://example.com/remote.png"');
+		expect(result.images.map((image) => image.assetId)).toEqual(["asset_1", "asset_2"]);
 	});
 });

@@ -21,18 +21,27 @@
 		{
 			id: "xiaohongshu",
 			hosts: ["creator.xiaohongshu.com"],
-			bodyFormat: "plain-text",
+			bodyFormat: "rich-html",
+			insertMode: "rich-html-placeholder-assets",
 			includeFilesInMainPaste: false,
-			pasteFilesAfterText: true,
-			stripAssetReferences: true
+			pasteFilesAfterText: false,
+			imageUploadWaitMs: 60000,
+			markerWaitMs: 10000,
+			filePasteDelayMs: 1200
 		},
 		{
 			id: "bilibili",
 			hosts: ["member.bilibili.com"],
+			frameScope: "child",
 			bodyFormat: "rich-html",
+			insertMode: "rich-html-placeholder-assets",
 			includeFilesInMainPaste: false,
-			pasteFilesAfterText: true,
-			stripAssetReferences: true
+			pasteFilesAfterText: false,
+			imageUploadWaitMs: 60000,
+			markerWaitMs: 10000,
+			filePasteDelayMs: 1200,
+			titleSelectors: ["textarea.title-input__inner", "textarea[placeholder*='标题']"],
+			bodySelectors: [".tiptap.ProseMirror[contenteditable='true']", ".ProseMirror[contenteditable='true']"]
 		},
 		{ id: "zhishixingqiu", hosts: ["wx.zsxq.com"], bodyFormat: "rich-html" }
 	]) {
@@ -42,8 +51,8 @@
 			includeFilesInMainPaste: adapter.includeFilesInMainPaste ?? true,
 			pasteFilesAfterText: adapter.pasteFilesAfterText ?? false,
 			autoInsertTimeoutMs: 90000,
-			titleSelectors: fallbackTitleSelectors,
-			bodySelectors: fallbackBodySelectors
+			titleSelectors: adapter.titleSelectors || fallbackTitleSelectors,
+			bodySelectors: adapter.bodySelectors || fallbackBodySelectors
 		});
 	}
 })();
