@@ -10,7 +10,7 @@
 		pasteFilesAfterText: false,
 		replaceAssetUrlsInMarkdown: false,
 		pageUploadScript: "src/page-x-upload.js",
-		pageUploadScriptVersion: "v2",
+		pageUploadScriptVersion: "v3",
 		pageUploadRequestSource: "OTP_COMPANION_X_UPLOAD_REQUEST_V1",
 		pageUploadResponseSource: "OTP_COMPANION_X_UPLOAD_RESPONSE_V1",
 		imageUploadWaitMs: 90000,

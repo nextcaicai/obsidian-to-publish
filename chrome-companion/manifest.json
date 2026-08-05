@@ -82,6 +82,15 @@
 			"matches": [
 				"https://editor.csdn.net/*"
 			]
+		},
+		{
+			"resources": [
+				"src/page-prosemirror-upload.js"
+			],
+			"matches": [
+				"https://creator.xiaohongshu.com/*",
+				"https://member.bilibili.com/*"
+			]
 		}
 	],
 	"options_page": "options.html",

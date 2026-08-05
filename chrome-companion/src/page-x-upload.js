@@ -113,29 +113,43 @@
 		}
 
 		await delay(80);
-		const beforeMediaCount = countMediaBlocks(draftNode);
+		const beforeMediaKeys = getMediaBlockKeys(draftNode);
 		try {
 			onFilesAdded([file]);
 		} catch (error) {
 			return { ok: false, error: error?.message || "X image upload handler failed." };
 		}
 
-		const mediaDetected = await waitForCondition(
+		const uploadedMedia = await waitForValue(
 			() => {
 				const latestNode = findDraftStateNode() || draftNode;
-				return countMediaBlocks(latestNode) > beforeMediaCount;
+				const mediaKey = findNewMediaBlockKey(latestNode, beforeMediaKeys);
+				return mediaKey ? { draftNode: latestNode, mediaKey } : null;
 			},
 			options.imageUploadWaitMs || 60000,
 			350
 		);
-		const latestNode = findDraftStateNode() || draftNode;
-		const markerCleaned = replaceMarkerText(latestNode, marker, "");
-		if (!mediaDetected) {
+		if (!uploadedMedia) {
 			return {
 				ok: false,
 				placed: false,
 				error: "X image upload did not create a media block before timeout.",
-				markerCleaned,
+				markerCleaned: false,
+				marker
+			};
+		}
+
+		const placed = relocateMediaBlockToMarker(
+			uploadedMedia.draftNode,
+			marker,
+			uploadedMedia.mediaKey
+		);
+		if (!placed) {
+			return {
+				ok: false,
+				placed: false,
+				error: "X uploaded the image, but its media block could not be moved to the marker.",
+				markerCleaned: false,
 				marker
 			};
 		}
@@ -143,8 +157,8 @@
 		return {
 			ok: true,
 			placed: true,
-			mediaDetected,
-			markerCleaned,
+			mediaDetected: true,
+			markerCleaned: true,
 			marker
 		};
 	}
@@ -333,39 +347,71 @@
 			location = {
 				blockKey: key,
 				offset,
-				length: marker.length
+				length: marker.length,
+				exact: text.trim() === marker
 			};
 		});
 		return location;
 	}
 
-	function replaceMarkerText(draftNode, marker, replacement) {
-		const editorState = draftNode.props.editorState;
+	function relocateMediaBlockToMarker(draftNode, marker, mediaKey) {
+		const editorState = draftNode?.props?.editorState;
+		const contentState = editorState?.getCurrentContent?.();
+		const blockMap = contentState?.getBlockMap?.();
+		const location = contentState ? findMarkerLocation(contentState, marker) : null;
+		const mediaBlock = blockMap?.get?.(mediaKey);
+		if (!editorState || !contentState || !blockMap?.forEach || !location || !mediaBlock) {
+			return false;
+		}
+
 		const EditorState = editorState.constructor;
 		const SelectionState = editorState.getSelection().constructor;
-		const contentState = editorState.getCurrentContent();
-		const blockMap = contentState.getBlockMap();
-		const location = findMarkerLocation(contentState, marker);
-		if (!location) {
+		let nextBlockMap = blockMap.clear();
+		let markerBlockPreserved = false;
+		blockMap.forEach((block, key) => {
+			if (key === mediaKey) {
+				return;
+			}
+			if (key !== location.blockKey) {
+				nextBlockMap = nextBlockMap.set(key, block);
+				return;
+			}
+
+			nextBlockMap = nextBlockMap.set(mediaKey, mediaBlock);
+			if (!location.exact) {
+				const cleanedBlock = removeMarkerFromBlock(block, location);
+				if (cleanedBlock) {
+					nextBlockMap = nextBlockMap.set(key, cleanedBlock);
+					markerBlockPreserved = true;
+				}
+			}
+		});
+
+		if (!nextBlockMap.has?.(mediaKey)) {
 			return false;
 		}
-
-		const block = blockMap.get(location.blockKey);
-		const currentText = block.getText() || "";
-		const nextText = `${currentText.slice(0, location.offset)}${replacement}${currentText.slice(location.offset + location.length)}`;
-		const characterList = rebuildCharacterList(block, nextText.length);
-		if (!characterList) {
-			return false;
-		}
-
-		const nextBlock = block.merge({ text: nextText, characterList });
-		const selection = SelectionState.createEmpty(location.blockKey);
+		const selectionKey = markerBlockPreserved ? location.blockKey : mediaKey;
+		const selection = SelectionState.createEmpty(selectionKey);
 		const nextContent = contentState
-			.set("blockMap", blockMap.set(location.blockKey, nextBlock))
+			.set("blockMap", nextBlockMap)
 			.set("selectionBefore", selection)
 			.set("selectionAfter", selection);
-		draftNode.props.onChange(EditorState.push(editorState, nextContent, "change-block-data"));
+		let nextEditorState = EditorState.push(editorState, nextContent, "insert-fragment");
+		nextEditorState = EditorState.forceSelection(nextEditorState, selection);
+		draftNode.props.onChange(nextEditorState);
 		return true;
+	}
+
+	function removeMarkerFromBlock(block, location) {
+		const currentText = block.getText() || "";
+		const nextText = `${currentText.slice(0, location.offset)}${currentText.slice(location.offset + location.length)}`;
+		const sourceList = block.getCharacterList?.();
+		let characterList = sourceList?.slice?.(0, location.offset)
+			?.concat?.(sourceList.slice(location.offset + location.length));
+		if (!characterList || characterList.size !== nextText.length) {
+			characterList = rebuildCharacterList(block, nextText.length);
+		}
+		return characterList ? block.merge({ text: nextText, characterList }) : null;
 	}
 
 	function rebuildCharacterList(block, length) {
@@ -377,19 +423,28 @@
 		return sourceList.clear().concat(Array.from({ length }, () => sampleCharacter));
 	}
 
-	function countMediaBlocks(draftNode) {
+	function getMediaBlockKeys(draftNode) {
 		const contentState = draftNode?.props?.editorState?.getCurrentContent?.();
 		if (!contentState?.getBlockMap) {
-			return 0;
+			return new Set();
 		}
 
-		let count = 0;
-		contentState.getBlockMap().forEach((block) => {
+		const keys = new Set();
+		contentState.getBlockMap().forEach((block, key) => {
 			if (block.getType() === "atomic") {
-				count += 1;
+				keys.add(key);
 			}
 		});
-		return count;
+		return keys;
+	}
+
+	function findNewMediaBlockKey(draftNode, previousKeys) {
+		for (const key of getMediaBlockKeys(draftNode)) {
+			if (!previousKeys.has(key)) {
+				return key;
+			}
+		}
+		return "";
 	}
 
 	function base64ToFile(base64, fileName, mime) {

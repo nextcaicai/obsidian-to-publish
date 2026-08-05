@@ -302,6 +302,22 @@
 				imageIncluded: false
 			};
 		}
+		if (markerPlan.images.length === 0) {
+			return {
+				inserted: true,
+				imageIncluded: false,
+				imageTotal: 0,
+				imageUploaded: 0,
+				imageFailed: 0
+			};
+		}
+
+		if (adapter.pageScriptPositionsAssets) {
+			const pageResult = await insertRichHtmlAssetsViaPageScript(markerPlan, adapter);
+			if (pageResult) {
+				return pageResult;
+			}
+		}
 
 		let uploaded = 0;
 		let failed = 0;
@@ -1114,6 +1130,78 @@
 		return {
 			inserted: response?.bodyWritten === true,
 			imageDelivery: "page-marker-upload",
+			imageIncluded: uploaded > 0,
+			imageTotal: assets.length,
+			imageUploaded: uploaded,
+			imageFailed: Math.max(0, assets.length - uploaded)
+		};
+	}
+
+	async function insertRichHtmlAssetsViaPageScript(markerPlan, adapter) {
+		if (!adapter.pageUploadScript) {
+			return null;
+		}
+
+		const scriptLoaded = await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
+		if (!scriptLoaded) {
+			return null;
+		}
+		const requestId = `otp-rich-position-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+		const assets = markerPlan.images.map((image) => ({
+			name: image.asset.fileName || `${image.asset.id}.png`,
+			type: image.asset.mime || "image/png",
+			base64: image.asset.base64,
+			marker: image.marker,
+			assetId: image.asset.id || "",
+			alt: image.alt || image.asset.fileName || ""
+		}));
+
+		const response = await new Promise((resolve) => {
+			const timeoutMs = adapter.pageUploadWaitMs
+				?? Math.max(adapter.imageUploadWaitMs ?? 60000, assets.length * 45000);
+			const timeout = window.setTimeout(() => {
+				window.removeEventListener("message", onMessage);
+				resolve({ ok: false, started: true, uploads: [] });
+			}, timeoutMs);
+
+			function onMessage(event) {
+				if (event.source !== window
+					|| event.data?.source !== adapter.pageUploadResponseSource
+					|| event.data.requestId !== requestId) {
+					return;
+				}
+				window.clearTimeout(timeout);
+				window.removeEventListener("message", onMessage);
+				resolve(event.data);
+			}
+
+			window.addEventListener("message", onMessage);
+			window.postMessage({
+				source: adapter.pageUploadRequestSource,
+				requestId,
+				assets,
+				options: {
+					...(adapter.pageUploadOptions || {}),
+					markerWaitMs: adapter.markerWaitMs ?? 10000,
+					imageUploadWaitMs: adapter.imageUploadWaitMs ?? 60000
+				}
+			}, window.location.origin);
+		});
+
+		if (response?.started !== true) {
+			console.warn(`${adapter.id || "platform"} editor-state image placement was unavailable.`, response?.error);
+			return null;
+		}
+		const uploads = Array.isArray(response.uploads) ? response.uploads : [];
+		for (const upload of uploads) {
+			if (upload?.error) {
+				console.warn(`${adapter.id || "platform"} image placement failed.`, upload.error);
+			}
+		}
+		const uploaded = uploads.filter((upload) => upload?.ok && upload?.placed).length;
+		return {
+			inserted: true,
+			imageDelivery: "prosemirror-marker-upload",
 			imageIncluded: uploaded > 0,
 			imageTotal: assets.length,
 			imageUploaded: uploaded,
