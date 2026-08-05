@@ -23,8 +23,11 @@
 			env: "prod",
 			currentLine: "external"
 		},
+		fallbackUploadViaPaste: true,
 		cleanupUploadedMarkerAltText: true,
 		uploadedImageUrlPattern: /csdnimg\.cn/i,
+		uploadSearchRootSelector: ".editor-content,.markdown_views,.cm-editor,body",
+		searchDocumentTextForUploads: true,
 		imageUploadWaitMs: 60000,
 		markerWaitMs: 8000,
 		markerPollMs: 300,

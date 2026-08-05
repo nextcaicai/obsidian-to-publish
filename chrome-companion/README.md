@@ -31,9 +31,10 @@ This directory contains an unpacked Chrome extension for the Obsidian to Publish
 
 ## Adapter Layout
 
-- `src/content-shared.js`: shared DOM, paste, asset, and retry helpers.
+- `src/assets/publish-assets.js`: shared asset upload queue, de-duplication, retry, cache, and Markdown URL rewriting.
+- `src/content-shared.js`: shared DOM, paste, page-upload bridge, asset, and retry helpers.
 - `src/platforms/*.js`: platform-specific selectors and insertion strategy.
 - `src/content.js`: page entrypoint, panel UI, and retry loop.
 
 Keep platform-specific fixes in the matching `src/platforms/<platform>.js` file unless the shared helper itself is wrong.
-Current image policy: Substack keeps rich HTML image paste; CSDN inserts Markdown with temporary image markers and pastes local image files at each marker; Juejin uploads images through the page uploader before inserting final Markdown; X and Zhihu intentionally omit local images until dedicated image adapters are implemented.
+Current image policy: Substack keeps rich HTML image paste; Juejin and CSDN upload local images before inserting final Markdown; CSDN falls back to editor paste upload if the page SDK is unavailable; X and Zhihu intentionally omit local images until dedicated image adapters are implemented.

@@ -38,7 +38,7 @@
 			} catch (error) {
 				return {
 					url: "",
-					error: error?.message || "CSDN image upload failed."
+					error: describeError(error)
 				};
 			}
 		});
@@ -49,12 +49,14 @@
 		return new Promise((resolve, reject) => {
 			const tick = () => {
 				const uploadImg = window.csdn?.upload?.uploadImg;
-				if (typeof uploadImg === "function") {
+				if (typeof uploadImg === "function"
+					&& typeof window.csdn?.httpGateway === "function"
+					&& typeof window.csdn?.axios === "function") {
 					resolve(uploadImg);
 					return;
 				}
 				if (Date.now() - startedAt >= timeoutMs) {
-					reject(new Error("CSDN upload SDK is not available on this page."));
+					reject(new Error("CSDN upload SDK dependencies are not available on this page."));
 					return;
 				}
 				window.setTimeout(tick, 300);
@@ -177,6 +179,31 @@
 			}
 		}
 		throw lastError || new Error("CSDN image upload failed.");
+	}
+
+	function describeError(error) {
+		if (!error) {
+			return "CSDN image upload failed.";
+		}
+		if (typeof error === "string") {
+			return error;
+		}
+		if (error instanceof Error && error.message) {
+			return error.message;
+		}
+		const responseMessage = error?.response?.data?.message
+			|| error?.response?.data?.msg
+			|| error?.data?.message
+			|| error?.data?.msg
+			|| error?.message;
+		if (responseMessage) {
+			return String(responseMessage);
+		}
+		try {
+			return JSON.stringify(error);
+		} catch {
+			return String(error);
+		}
 	}
 
 	function normalizePositiveInteger(value, fallback) {

@@ -116,7 +116,7 @@ async function autoInsertDraft(task, adapter, panel) {
 
 	const startedAt = Date.now();
 	let titleAlreadyInserted = false;
-	while (Date.now() - startedAt < companion.AUTO_INSERT_TIMEOUT_MS) {
+	while (Date.now() - startedAt < (adapter.autoInsertTimeoutMs ?? companion.AUTO_INSERT_TIMEOUT_MS)) {
 		const result = await companion.insertDraftWithAdapter(task, adapter, {
 			skipTitle: titleAlreadyInserted
 		});

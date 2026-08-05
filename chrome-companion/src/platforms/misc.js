@@ -27,6 +27,7 @@
 			preferPaste: true,
 			includeFilesInMainPaste: true,
 			pasteFilesAfterText: false,
+			autoInsertTimeoutMs: 90000,
 			titleSelectors: fallbackTitleSelectors,
 			bodySelectors: fallbackBodySelectors
 		});

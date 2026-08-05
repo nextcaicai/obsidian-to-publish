@@ -11,8 +11,8 @@ const SUPPORTED_PLATFORMS = [
 	{ id: "juejin", label: "掘金", editorUrl: "https://juejin.cn/editor/drafts/new?v=2" },
 	{ id: "zhihu", label: "知乎", editorUrl: "https://zhuanlan.zhihu.com/write" },
 	{ id: "substack", label: "Substack", editorUrl: "https://nextcaicai.substack.com/publish/post/" },
-	{ id: "xiaohongshu", label: "小红书", editorUrl: "https://creator.xiaohongshu.com/publish/publish" },
-	{ id: "bilibili", label: "B站专栏", editorUrl: "https://member.bilibili.com/platform/upload/text/apply" },
+	{ id: "xiaohongshu", label: "小红书", editorUrl: "https://creator.xiaohongshu.com/publish/publish?from=menu&target=article" },
+	{ id: "bilibili", label: "B站专栏", editorUrl: "https://member.bilibili.com/platform/upload/text" },
 	{ id: "zhishixingqiu", label: "知识星球", editorUrl: "https://wx.zsxq.com" }
 ];
 

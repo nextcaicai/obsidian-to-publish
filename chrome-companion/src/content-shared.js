@@ -166,7 +166,7 @@
 		const uploadResult = await assetTools.uploadMarkdownAssets({
 			markdown: payload.text,
 			assets: payload.assets,
-			uploadAsset: (asset) => uploadAssetViaPageScript(asset, adapter),
+			uploadAsset: (asset) => uploadAssetThroughAdapter(target, asset, adapter),
 			cache: getUploadCache(adapter),
 			concurrency: adapter.uploadQueueConcurrency ?? 2,
 			retries: adapter.uploadQueueRetries ?? 2,
@@ -202,6 +202,16 @@
 			imageUploaded: uploadResult.urlByAssetId.size,
 			imageFailed: uploadResult.uploads.filter((upload) => !upload.url).length
 		};
+	}
+
+	async function uploadAssetThroughAdapter(target, asset, adapter) {
+		const pageUpload = await uploadAssetViaPageScript(asset, adapter);
+		if (pageUpload?.url || !adapter.fallbackUploadViaPaste) {
+			return pageUpload;
+		}
+
+		const pasteUpload = await uploadAssetViaEditorPaste(target, asset, adapter);
+		return pasteUpload || pageUpload;
 	}
 
 	async function insertMarkdownWithImageMarkers(target, payload, adapter) {
@@ -759,6 +769,42 @@
 			base64: asset.base64
 		}], adapter, 1);
 		return uploads[0] || null;
+	}
+
+	async function uploadAssetViaEditorPaste(target, asset, adapter) {
+		const file = assetToFile(asset);
+		if (!file) {
+			return null;
+		}
+
+		const beforeUploadText = getUploadSearchText(target, adapter);
+		target.focus();
+		target.click();
+		const pasteResult = dispatchPasteEvent(target, {
+			text: "",
+			html: "",
+			files: [file]
+		});
+		if (!pasteResult.fileIncluded) {
+			return null;
+		}
+
+		const uploadedImageMarkdown = await waitForValue(
+			() => findNewUploadedImageMarkdown(beforeUploadText, getUploadSearchText(target, adapter), adapter, { file }),
+			adapter.imageUploadWaitMs ?? 12000,
+			adapter.markerPollMs ?? 250
+		);
+		if (!uploadedImageMarkdown?.url) {
+			return null;
+		}
+
+		const removedTemporarySnippet = removeTextFromWritable(target, uploadedImageMarkdown.snippet);
+		if (!removedTemporarySnippet) {
+			removeTextFromWritable(target, uploadedImageMarkdown.url);
+		}
+		return {
+			url: uploadedImageMarkdown.url
+		};
 	}
 
 	function uploadPageAssetsViaPageScript(assets, adapter, expectedCount) {
