@@ -1355,7 +1355,7 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("连接状态")
-			.setDesc(getChromeCompanionStatusLabel(bridgeStatus))
+			.setDesc(createChromeCompanionStatusFragment(bridgeStatus))
 			.addButton((button) => button
 				.setButtonText("刷新")
 				.onClick(() => {
@@ -1402,6 +1402,47 @@ function getChromeCompanionStatusLabel(status: ReturnType<WeChatPreviewCopyPlugi
 	const client = status.clientLabel || "Chrome companion";
 	const version = status.clientVersion ? ` ${status.clientVersion}` : "";
 	return `已连接 ${client}${version}，端口 ${status.port}。`;
+}
+
+function createChromeCompanionStatusFragment(status: ReturnType<WeChatPreviewCopyPlugin["getChromeCompanionBridgeStatus"]>): DocumentFragment {
+	const fragment = document.createDocumentFragment();
+	const statusView = getChromeCompanionStatusView(status);
+	const badge = document.createElement("span");
+	badge.className = `obsidian-to-publish-bridge-status obsidian-to-publish-bridge-status-${statusView.tone}`;
+	badge.textContent = statusView.label;
+	fragment.appendChild(badge);
+	fragment.appendChild(document.createTextNode(statusView.detail));
+	return fragment;
+}
+
+function getChromeCompanionStatusView(status: ReturnType<WeChatPreviewCopyPlugin["getChromeCompanionBridgeStatus"]>): {
+	detail: string;
+	label: string;
+	tone: "connected" | "waiting" | "offline";
+} {
+	if (!status.running) {
+		return {
+			label: "未启动",
+			tone: "offline",
+			detail: ` 本地 bridge 未启动，端口 ${status.port}。`
+		};
+	}
+
+	if (!status.hasClient) {
+		return {
+			label: "等待连接",
+			tone: "waiting",
+			detail: ` 已监听 127.0.0.1:${status.port}，等待 Chrome companion 连接。`
+		};
+	}
+
+	const client = status.clientLabel || "Chrome companion";
+	const version = status.clientVersion ? ` ${status.clientVersion}` : "";
+	return {
+		label: "已连接",
+		tone: "connected",
+		detail: ` ${client}${version}，端口 ${status.port}。`
+	};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

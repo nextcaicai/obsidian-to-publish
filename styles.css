@@ -29,6 +29,32 @@
 	white-space: nowrap;
 }
 
+.obsidian-to-publish-bridge-status {
+	border-radius: 999px;
+	display: inline-block;
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	line-height: 1;
+	margin-right: 8px;
+	padding: 4px 8px;
+	vertical-align: 1px;
+}
+
+.obsidian-to-publish-bridge-status-connected {
+	background: rgba(var(--color-green-rgb), 0.16);
+	color: var(--color-green);
+}
+
+.obsidian-to-publish-bridge-status-waiting {
+	background: rgba(var(--color-yellow-rgb), 0.18);
+	color: var(--color-yellow);
+}
+
+.obsidian-to-publish-bridge-status-offline {
+	background: var(--background-modifier-error);
+	color: var(--text-error);
+}
+
 .obsidian-to-publish-content {
 	flex: 1 1 auto;
 	overflow: auto;
