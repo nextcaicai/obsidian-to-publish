@@ -491,7 +491,16 @@ function getRequiredString(data: Record<string, unknown>, key: string, message: 
 }
 
 function createWechatApiError(label: string, data: Record<string, unknown>): Error {
-	return createApiError(label, data.errcode, data.errmsg || JSON.stringify(data));
+	const code = data.errcode;
+	const message = typeof data.errmsg === "string" ? data.errmsg : "";
+	if (Number(code) === 40164) {
+		const ip = message.match(/\binvalid ip\s+((?:\d{1,3}\.){3}\d{1,3})\b/i)?.[1] || "当前出口 IP";
+		return new Error(
+			`${label} 失败 (40164)：${ip} 未加入微信公众号 API IP 白名单。请在公众号后台将该 IP 加入白名单后重试。`
+		);
+	}
+
+	return createApiError(label, code, message || JSON.stringify(data));
 }
 
 function truncateText(value: string, maxLength: number): string {

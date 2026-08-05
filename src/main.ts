@@ -462,7 +462,7 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		new Notice("正在同步到飞书云文档...");
 
 		try {
-			const publishPackage = await leaf.view.buildPublishPackage(this.settings.targetPlatform);
+			const publishPackage = await leaf.view.buildPublishPackage("feishu");
 			const result = await syncPackageToFeishuDoc(
 				publishPackage,
 				this.settings.feishuDocs,
@@ -486,6 +486,28 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 
 	getCurrentPlatformProfile(): PlatformProfile {
 		return PLATFORM_PROFILES[this.settings.targetPlatform];
+	}
+
+	shouldUseWechatOfficialDraftAction(): boolean {
+		return this.settings.targetPlatform === "wechat" && this.settings.wechatOfficial.enabled;
+	}
+
+	shouldUseFeishuDocsAction(): boolean {
+		return this.settings.targetPlatform === "feishu";
+	}
+
+	shouldUseChromeCompanionForCurrentPlatform(): boolean {
+		return this.settings.chromeCompanionBridge.enabled
+			&& this.settings.targetPlatform !== "wechat"
+			&& this.settings.targetPlatform !== "feishu";
+	}
+
+	syncPreviewControls() {
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_WECHAT_PREVIEW)) {
+			if (leaf.view instanceof WeChatPreviewCopyView) {
+				leaf.view.syncPlatformControls();
+			}
+		}
 	}
 
 	async setTargetPlatform(platform: CopyPlatform) {
@@ -872,10 +894,18 @@ class WeChatPreviewCopyView extends ItemView {
 		const canOpenEditor = isSafeEditorUrl(profile.editorUrl);
 		this.platformSelect.value = profile.id;
 		this.copyButton.setText("复制");
-		this.openEditorButton.disabled = !canOpenEditor;
-		this.openEditorButton.setText(
-			canOpenEditor ? "复制并打开" : "无可用编辑器入口"
-		);
+		if (this.plugin.shouldUseFeishuDocsAction()) {
+			this.openEditorButton.disabled = false;
+			this.openEditorButton.setText("同步飞书");
+		} else if (this.plugin.shouldUseWechatOfficialDraftAction()) {
+			this.openEditorButton.disabled = false;
+			this.openEditorButton.setText("同步草稿箱");
+		} else {
+			this.openEditorButton.disabled = !canOpenEditor;
+			this.openEditorButton.setText(
+				canOpenEditor ? "复制并打开" : "无可用编辑器入口"
+			);
+		}
 	}
 
 	async onClose() {
@@ -980,7 +1010,17 @@ class WeChatPreviewCopyView extends ItemView {
 	}
 
 	async copyAndOpenCurrentPlatform() {
-		if (this.plugin.settings.chromeCompanionBridge.enabled) {
+		if (this.plugin.shouldUseFeishuDocsAction()) {
+			await this.plugin.syncCurrentNoteToFeishuDoc();
+			return;
+		}
+
+		if (this.plugin.shouldUseWechatOfficialDraftAction()) {
+			await this.plugin.sendCurrentNoteToWechatOfficialDraft();
+			return;
+		}
+
+		if (this.plugin.shouldUseChromeCompanionForCurrentPlatform()) {
 			if (!this.currentFile) {
 				new Notice("请先打开一篇 Markdown 笔记。");
 				return;
@@ -1405,6 +1445,7 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.wechatOfficial.enabled = value;
 					await this.plugin.saveSettings();
+					this.plugin.syncPreviewControls();
 				}));
 
 		new Setting(containerEl)
@@ -1492,6 +1533,7 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.feishuDocs.enabled = value;
 					await this.plugin.saveSettings();
+					this.plugin.syncPreviewControls();
 				}));
 
 		new Setting(containerEl)
@@ -1519,7 +1561,7 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("目标文件夹 Token 或 URL")
-			.setDesc("导入后的飞书云文档会创建在这个文件夹里；需把文件夹权限授予应用机器人。")
+			.setDesc("导入后的文档会创建在此文件夹；需启用应用机器人，并把文件夹共享给包含该机器人的群组，授予编辑权限。")
 			.addText((text) => text
 				.setPlaceholder("fld...")
 				.setValue(this.plugin.settings.feishuDocs.folderToken)

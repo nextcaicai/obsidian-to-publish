@@ -16,7 +16,7 @@ export interface OfficialRequestResponse {
 export type OfficialRequest = (options: OfficialRequestOptions) => Promise<OfficialRequestResponse>;
 
 export function responseJsonRecord(response: OfficialRequestResponse): Record<string, unknown> {
-	const value = response.json;
+	const value = readResponseJson(response);
 	return isRecord(value) ? value : {};
 }
 
@@ -60,10 +60,11 @@ export function formatEndpoint(url: string): string {
 }
 
 function formatResponseDetails(response: OfficialRequestResponse): string {
-	if (isRecord(response.json)) {
-		const code = response.json.code ?? response.json.errcode ?? response.json.Code;
-		const message = response.json.msg ?? response.json.errmsg ?? response.json.message ?? response.json.error;
-		const requestId = response.json.request_id ?? response.json.requestId ?? response.json.log_id;
+	const json = readResponseJson(response);
+	if (isRecord(json)) {
+		const code = json.code ?? json.errcode ?? json.Code;
+		const message = json.msg ?? json.errmsg ?? json.message ?? json.error;
+		const requestId = json.request_id ?? json.requestId ?? json.log_id;
 		return [
 			code !== undefined && code !== null && code !== "" ? `code ${String(code)}` : "",
 			typeof message === "string" && message ? message : "",
@@ -73,4 +74,12 @@ function formatResponseDetails(response: OfficialRequestResponse): string {
 
 	const text = String(response.text || "").trim();
 	return text.length > 300 ? `${text.slice(0, 300)}...` : text;
+}
+
+function readResponseJson(response: OfficialRequestResponse): unknown {
+	try {
+		return response.json;
+	} catch {
+		return undefined;
+	}
 }

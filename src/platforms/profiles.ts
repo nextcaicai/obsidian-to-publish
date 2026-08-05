@@ -281,6 +281,20 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 		],
 		transform: transformWechatArticle
 	},
+	feishu: {
+		id: "feishu",
+		label: "飞书云文档",
+		copyLabel: "飞书云文档",
+		editorUrl: "https://www.feishu.cn/drive/home/",
+		preferredFormat: "markdown",
+		capabilities: {
+			...MARKDOWN_CAPABILITIES,
+			supportsDraftApi: true
+		},
+		wrapperStyle: DEFAULT_WRAPPER_STYLE,
+		rules: LONG_FORM_RULES,
+		transform: transformInternalLinksToPlainText
+	},
 	zhishixingqiu: {
 		id: "zhishixingqiu",
 		label: "知识星球",

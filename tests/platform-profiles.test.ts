@@ -11,6 +11,7 @@ describe("platform profiles", () => {
 	it("keeps the first supported platform batch in a stable order", () => {
 		expect(PLATFORM_PROFILE_LIST.map((profile) => profile.id)).toEqual([
 			"wechat",
+			"feishu",
 			"zhishixingqiu",
 			"zhihu",
 			"csdn",
@@ -32,6 +33,8 @@ describe("platform profiles", () => {
 	});
 
 	it("records markdown-first and text-first platforms explicitly", () => {
+		expect(PLATFORM_PROFILES.feishu.preferredFormat).toBe("markdown");
+		expect(PLATFORM_PROFILES.feishu.capabilities.supportsDraftApi).toBe(true);
 		expect(PLATFORM_PROFILES.csdn.preferredFormat).toBe("markdown");
 		expect(PLATFORM_PROFILES.juejin.preferredFormat).toBe("markdown");
 		expect(PLATFORM_PROFILES.juejin.capabilities.supportsRichHtml).toBe(true);
@@ -139,6 +142,7 @@ describe("platform profiles", () => {
 
 	it("accepts known platform ids and rejects unknown values", () => {
 		expect(isCopyPlatform("wechat")).toBe(true);
+		expect(isCopyPlatform("feishu")).toBe(true);
 		expect(isCopyPlatform("bilibili")).toBe(true);
 		expect(isCopyPlatform("unknown")).toBe(false);
 		expect(isCopyPlatform("__proto__")).toBe(false);

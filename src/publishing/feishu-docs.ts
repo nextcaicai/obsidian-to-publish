@@ -34,6 +34,7 @@ export interface FeishuDocSyncResult {
 
 interface FeishuImportTaskResult {
 	jobStatus: number;
+	jobErrorMessage: string;
 	token: string;
 	url: string;
 }
@@ -275,7 +276,7 @@ export class FeishuDocsClient {
 		const url = `${FEISHU_API_BASE_URL}/drive/v1/import_tasks/${encodeURIComponent(ticket)}`;
 		const response = await this.sendRequest("查询飞书导入任务", {
 			url,
-			method: "POST",
+			method: "GET",
 			headers: {
 				"Authorization": `Bearer ${token}`,
 				"Content-Type": "application/json; charset=utf-8"
@@ -293,6 +294,7 @@ export class FeishuDocsClient {
 
 		return {
 			jobStatus: typeof result.job_status === "number" ? result.job_status : -1,
+			jobErrorMessage: typeof result.job_error_msg === "string" ? result.job_error_msg.trim() : "",
 			token: typeof result.token === "string" ? result.token : "",
 			url: typeof result.url === "string" ? result.url : ""
 		};
@@ -316,7 +318,7 @@ export class FeishuDocsClient {
 			}
 
 			if (result.jobStatus !== 1 && result.jobStatus !== 2) {
-				throw new Error(`飞书导入任务失败，job_status=${result.jobStatus}。`);
+				throw createFeishuImportJobError(result);
 			}
 
 			await this.wait(attempt < 3 ? 3000 : 5000);
@@ -378,6 +380,21 @@ function assertFeishuSettingsReady(settings: FeishuDocsSettings) {
 	if (!settings.folderToken) {
 		throw new Error("请先在插件设置中填写飞书目标文件夹 token 或文件夹 URL。");
 	}
+}
+
+function createFeishuImportJobError(result: FeishuImportTaskResult): Error {
+	const status = result.jobStatus;
+	const detail = result.jobErrorMessage && result.jobErrorMessage.toLowerCase() !== "success"
+		? ` 飞书返回：${redactSensitiveText(result.jobErrorMessage).slice(0, 200)}。`
+		: "";
+
+	if (Math.abs(status) === 116) {
+		return new Error(
+			`飞书导入失败：应用无权写入目标文件夹（job_status=${status}）。请确认文件夹 Token，并将目标文件夹共享给包含该应用机器人的群组，授予编辑权限。${detail}`
+		);
+	}
+
+	return new Error(`飞书导入任务失败，job_status=${status}。${detail}`);
 }
 
 function stripFrontmatter(markdown: string): string {

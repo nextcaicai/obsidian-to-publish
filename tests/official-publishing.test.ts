@@ -6,8 +6,8 @@ import {
 	prepareFeishuMarkdown,
 	syncPackageToFeishuDoc
 } from "../src/publishing/feishu-docs";
-import { redactSensitiveText } from "../src/publishing/official-http";
-import type { OfficialRequest } from "../src/publishing/official-http";
+import { createHttpError, redactSensitiveText } from "../src/publishing/official-http";
+import type { OfficialRequest, OfficialRequestResponse } from "../src/publishing/official-http";
 import type { PublishAsset, PublishPackageV1 } from "../src/publishing/types";
 import {
 	createWechatDraftFromPackage,
@@ -57,6 +57,24 @@ describe("official publishing", () => {
 	it("redacts API credentials from transport errors", () => {
 		expect(redactSensitiveText("https://api.weixin.qq.com/cgi-bin/token?secret=abc&access_token=xyz Authorization: Bearer token"))
 			.toBe("https://api.weixin.qq.com/cgi-bin/token?secret=***&access_token=*** Authorization: Bearer ***");
+	});
+
+	it("formats non-JSON HTTP responses without leaking a JSON parse error", () => {
+		const response = {
+			status: 404,
+			text: "404 page not found"
+		} as OfficialRequestResponse;
+		Object.defineProperty(response, "json", {
+			get() {
+				throw new SyntaxError("Unexpected non-whitespace character after JSON at position 4");
+			}
+		});
+
+		expect(createHttpError(
+			"查询飞书导入任务",
+			"https://open.feishu.cn/open-apis/drive/v1/import_tasks/ticket",
+			response
+		).message).toContain("HTTP 404：404 page not found");
 	});
 
 	it("builds multipart bodies with fields and one file", () => {
@@ -139,6 +157,29 @@ describe("official publishing", () => {
 		expect(draftPayload.articles[0].content).not.toContain("data:image");
 	});
 
+	it("explains how to resolve a WeChat IP whitelist rejection", async () => {
+		const request: OfficialRequest = async () => ({
+			status: 200,
+			json: {
+				errcode: 40164,
+				errmsg: "invalid ip 103.116.123.196 ipv6 ::ffff:103.116.123.196, not in whitelist"
+			}
+		});
+
+		await expect(createWechatDraftFromPackage(createPackage(), {
+			enabled: true,
+			appId: "wx-app",
+			appSecret: "secret",
+			author: "",
+			digest: "",
+			contentSourceUrl: "",
+			openComment: false,
+			onlyFansCanComment: false
+		}, request)).rejects.toThrow(
+			"103.116.123.196 未加入微信公众号 API IP 白名单"
+		);
+	});
+
 	it("parses Feishu folder URLs and preserves raw tokens", () => {
 		expect(parseFeishuFolderToken("https://example.feishu.cn/drive/folder/fldabc123")).toBe("fldabc123");
 		expect(parseFeishuFolderToken("https://example.feishu.cn/docs/docxxx?folder_token=fldquery")).toBe("fldquery");
@@ -154,9 +195,12 @@ describe("official publishing", () => {
 	});
 
 	it("imports Markdown into a Feishu cloud document", async () => {
-		const urls: string[] = [];
+		const requests: Array<{ url: string; method: string }> = [];
 		const request: OfficialRequest = async (options) => {
-			urls.push(options.url);
+			requests.push({
+				url: options.url,
+				method: options.method || "GET"
+			});
 			if (options.url.includes("/auth/v3/tenant_access_token/internal")) {
 				return { status: 200, json: { code: 0, tenant_access_token: "tenant-token", expire: 7200 } };
 			}
@@ -195,7 +239,44 @@ describe("official publishing", () => {
 
 		expect(result.token).toBe("doc-token");
 		expect(result.url).toBe("https://example.feishu.cn/docx/doc-token");
-		expect(urls.some((url) => url.includes("/drive/v1/medias/upload_all"))).toBe(true);
-		expect(urls.some((url) => url.endsWith("/drive/v1/import_tasks"))).toBe(true);
+		expect(requests.some((item) => item.url.includes("/drive/v1/medias/upload_all"))).toBe(true);
+		expect(requests.some((item) => item.url.endsWith("/drive/v1/import_tasks"))).toBe(true);
+		expect(requests.find((item) => item.url.includes("/drive/v1/import_tasks/ticket"))?.method).toBe("GET");
+	});
+
+	it("explains how to resolve a Feishu folder permission rejection", async () => {
+		const request: OfficialRequest = async (options) => {
+			if (options.url.includes("/auth/v3/tenant_access_token/internal")) {
+				return { status: 200, json: { code: 0, tenant_access_token: "tenant-token", expire: 7200 } };
+			}
+			if (options.url.includes("/drive/v1/medias/upload_all")) {
+				return { status: 200, json: { code: 0, data: { file_token: "file-token" } } };
+			}
+			if (options.url.endsWith("/drive/v1/import_tasks")) {
+				return { status: 200, json: { code: 0, data: { ticket: "ticket" } } };
+			}
+			return {
+				status: 200,
+				json: {
+					code: 0,
+					data: {
+						result: {
+							job_status: -116,
+							job_error_msg: "mount point has no permission"
+						}
+					}
+				}
+			};
+		};
+
+		await expect(syncPackageToFeishuDoc(createPackage(), {
+			enabled: true,
+			appId: "cli-app",
+			appSecret: "secret",
+			folderToken: "fldtarget",
+			ownerUserId: ""
+		}, request, async () => undefined)).rejects.toThrow(
+			"应用无权写入目标文件夹"
+		);
 	});
 });

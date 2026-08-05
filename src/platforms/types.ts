@@ -1,5 +1,6 @@
 export type CopyPlatform =
 	| "wechat"
+	| "feishu"
 	| "zhishixingqiu"
 	| "zhihu"
 	| "csdn"
