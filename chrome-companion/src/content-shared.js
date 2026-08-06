@@ -327,7 +327,7 @@
 				adapter.markerWaitMs ?? 8000,
 				adapter.markerPollMs ?? 250
 			);
-			if (!markerReady || !replaceTextInWritable(target, image.marker, "")) {
+			if (!markerReady) {
 				failed += 1;
 				continue;
 			}
@@ -341,8 +341,19 @@
 			const beforeImageCount = countEditorImages(target);
 			let uploadStarted = false;
 			if (adapter.uploadImagesViaFileInput) {
-				uploadStarted = await uploadImageViaFileInput(file, adapter);
+				uploadStarted = await runMarkerFileUploadSequence({
+					removeMarker: () => replaceTextInWritable(target, image.marker, ""),
+					settleSelection: async () => {
+						await delay(adapter.markerSelectionSettleMs ?? 120);
+						target.focus();
+					},
+					uploadImage: () => uploadImageViaFileInput(file, adapter)
+				});
 			} else {
+				if (!replaceTextInWritable(target, image.marker, "")) {
+					failed += 1;
+					continue;
+				}
 				const pasteResult = dispatchPasteEvent(target, {
 					text: "",
 					html: "",
@@ -358,6 +369,11 @@
 			);
 			if (imageInserted) {
 				uploaded += 1;
+				await removeRestoredMarkerAfterUpload({
+					hasMarker: () => getWritableText(target).includes(image.marker),
+					removeMarker: () => replaceTextInWritable(target, image.marker, ""),
+					settle: () => delay(adapter.markerCleanupSettleMs ?? 160)
+				});
 			} else {
 				failed += 1;
 				insertIntoWritableElement(target, {
@@ -381,6 +397,22 @@
 			imageUploaded: uploaded,
 			imageFailed: failed
 		};
+	}
+
+	async function runMarkerFileUploadSequence({ removeMarker, settleSelection, uploadImage }) {
+		if (!removeMarker()) {
+			return false;
+		}
+
+		await settleSelection();
+		return uploadImage();
+	}
+
+	async function removeRestoredMarkerAfterUpload({ hasMarker, removeMarker, settle }) {
+		if (hasMarker()) {
+			removeMarker();
+		}
+		return !hasMarker();
 	}
 
 	function getPlainTextFromHtml(html) {
@@ -1856,6 +1888,8 @@
 		delay,
 		getPlatformAdapter,
 		insertDraftWithAdapter,
-		registerPlatformAdapter
+		removeRestoredMarkerAfterUpload,
+		registerPlatformAdapter,
+		runMarkerFileUploadSequence
 	};
 })();

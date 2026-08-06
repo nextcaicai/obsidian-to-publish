@@ -16,6 +16,8 @@
 		imageUploadWaitMs: 60000,
 		markerWaitMs: 10000,
 		markerPollMs: 300,
+		markerCleanupSettleMs: 160,
+		markerSelectionSettleMs: 120,
 		titleSelectors: [
 			"textarea[placeholder*='标题']",
 			"input[placeholder*='标题']",

@@ -35,6 +35,7 @@ import {
 	DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS,
 	generateChromeCompanionToken
 } from "./publishing/chrome-bridge";
+import { sendToChromeCompanionAndActivate } from "./publishing/chrome-delivery";
 import {
 	createWechatDraftFromPackage,
 	DEFAULT_WECHAT_OFFICIAL_SETTINGS,
@@ -1068,7 +1069,10 @@ class WeChatPreviewCopyView extends ItemView {
 			await this.renderActiveFile();
 			try {
 				const publishPackage = await this.buildPublishPackage();
-				if (await this.plugin.sendPublishPackageToChromeCompanion(publishPackage)) {
+				if (await sendToChromeCompanionAndActivate(
+					() => this.plugin.sendPublishPackageToChromeCompanion(publishPackage),
+					activateChromeAfterCompanionDelivery
+				)) {
 					return;
 				}
 			} catch (error) {
@@ -2380,6 +2384,18 @@ async function openPlatformEditor(url: string): Promise<boolean> {
 }
 
 async function openUrlInChromeOnMac(url: string): Promise<boolean> {
+	return openChromeOnMac(url);
+}
+
+async function activateChromeAfterCompanionDelivery(): Promise<boolean> {
+	if (!Platform.isDesktopApp || !Platform.isMacOS) {
+		return false;
+	}
+
+	return openChromeOnMac();
+}
+
+async function openChromeOnMac(url?: string): Promise<boolean> {
 	const requireFn = getRuntimeRequire();
 	if (!requireFn) {
 		return false;
@@ -2398,12 +2414,21 @@ async function openUrlInChromeOnMac(url: string): Promise<boolean> {
 		}
 
 		return await new Promise<boolean>((resolve) => {
-			childProcess.execFile?.("open", ["-a", "Google Chrome", url], (error) => {
+			const args = ["-a", "Google Chrome"];
+			if (url) {
+				args.push(url);
+			}
+			childProcess.execFile?.("open", args, (error) => {
 				resolve(!error);
 			});
 		});
 	} catch (error) {
-		console.error(`Unable to open Chrome for platform editor: ${url}`, error);
+		console.error(
+			url
+				? `Unable to open Chrome for platform editor: ${url}`
+				: "Unable to activate Chrome after companion delivery.",
+			error
+		);
 		return false;
 	}
 }
