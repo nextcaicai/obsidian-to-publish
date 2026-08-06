@@ -9,6 +9,8 @@ export interface OfficialRequestOptions {
 
 export interface OfficialRequestResponse {
 	status: number;
+	headers?: Record<string, string>;
+	arrayBuffer?: ArrayBuffer;
 	json?: unknown;
 	text?: string;
 }

@@ -1,9 +1,11 @@
 import {
 	App,
+	ButtonComponent,
 	Component,
 	ItemView,
 	MarkdownRenderer,
 	MarkdownView,
+	Modal,
 	Notice,
 	Plugin,
 	PluginSettingTab,
@@ -36,7 +38,11 @@ import {
 import {
 	createWechatDraftFromPackage,
 	DEFAULT_WECHAT_OFFICIAL_SETTINGS,
-	normalizeWechatOfficialSettings
+	detectWechatOutboundIp as detectWechatOutboundIpWithOfficialApi,
+	normalizeWechatOfficialSettings,
+	upsertWechatCoverMediaRecord,
+	upsertWechatDraftRecord,
+	WechatIpWhitelistError
 } from "./publishing/wechat-official";
 import {
 	DEFAULT_FEISHU_DOCS_SETTINGS,
@@ -64,6 +70,7 @@ import type {
 } from "./publishing/types";
 
 const VIEW_TYPE_WECHAT_PREVIEW = "obsidian-to-publish-view";
+const WECHAT_DEVELOPER_PLATFORM_URL = "https://developers.weixin.qq.com/platform/";
 
 interface WeChatPreviewCopySettings {
 	autoOpen: boolean;
@@ -441,12 +448,39 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 			if (result.warnings.length > 0) {
 				console.warn("微信公众号草稿创建提示:", result.warnings);
 			}
+			this.settings.wechatOfficial.draftRecords = upsertWechatDraftRecord(
+				this.settings.wechatOfficial.draftRecords,
+				result.draftRecord
+			);
+			this.settings.wechatOfficial.coverMediaRecords = upsertWechatCoverMediaRecord(
+				this.settings.wechatOfficial.coverMediaRecords,
+				result.coverMediaRecord
+			);
+			let persistenceWarning = "";
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				console.error("微信草稿已同步，但本地草稿关联保存失败:", error);
+				persistenceWarning = "，但本地草稿关联保存失败";
+			}
 			const warningSuffix = result.warnings.length > 0 ? `，${result.warnings.length} 条提示见控制台` : "";
-			new Notice(`已创建微信公众号草稿：${result.mediaId}（${result.uploadedImages} 张正文图片）${warningSuffix}。`);
+			const actionLabel = result.action === "updated" ? "更新" : "创建";
+			new Notice(`已${actionLabel}微信公众号草稿：${result.mediaId}（${result.uploadedImages} 张正文图片）${warningSuffix}${persistenceWarning}。`);
 		} catch (error) {
 			console.error(error);
+			if (error instanceof WechatIpWhitelistError) {
+				new WechatIpWhitelistModal(this.app, error).open();
+				return;
+			}
 			new Notice(getErrorMessage(error, "发送到微信公众号草稿箱失败，请查看控制台。"));
 		}
+	}
+
+	async detectWechatOutboundIp() {
+		return detectWechatOutboundIpWithOfficialApi(
+			this.settings.wechatOfficial,
+			(options) => this.requestOfficialApi(options)
+		);
 	}
 
 	async syncCurrentNoteToFeishuDoc() {
@@ -1472,6 +1506,51 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 				text.inputEl.type = "password";
 			});
 
+		let detectedWechatIp = "";
+		let copyWechatIpButton: ButtonComponent;
+		const wechatIpSetting = new Setting(containerEl)
+			.setName("微信出口 IP")
+			.setDesc("优先使用微信接口返回的准确 IP；白名单已生效时使用公网 IPv4 检测服务兜底。")
+			.addButton((button) => button
+				.setButtonText("检测")
+				.onClick(async () => {
+					detectedWechatIp = "";
+					copyWechatIpButton.setDisabled(true);
+					button.setDisabled(true).setButtonText("检测中...");
+					try {
+						const result = await this.plugin.detectWechatOutboundIp();
+						detectedWechatIp = result.ip;
+						copyWechatIpButton.setDisabled(false);
+						const sourceLabel = result.source === "wechat"
+							? "微信接口"
+							: `公网检测服务 ${result.source}`;
+						const routingHint = result.source === "wechat"
+							? ""
+							: " 如果使用分流代理，以微信 40164 错误返回的 IP 为准。";
+						wechatIpSetting.setDesc(`当前 IPv4：${result.ip}（来源：${sourceLabel}）。${routingHint}`);
+						new Notice(`已检测微信出口 IP：${result.ip}`);
+					} catch (error) {
+						console.error(error);
+						wechatIpSetting.setDesc(getErrorMessage(error, "微信出口 IP 检测失败。"));
+						new Notice(getErrorMessage(error, "微信出口 IP 检测失败。"));
+					} finally {
+						button.setDisabled(false).setButtonText("检测");
+					}
+				}))
+			.addButton((button) => {
+				copyWechatIpButton = button;
+				button
+					.setButtonText("复制 IP")
+					.setDisabled(true)
+					.onClick(async () => {
+						if (!detectedWechatIp) {
+							return;
+						}
+						await writeTextClipboard(detectedWechatIp);
+						new Notice(`已复制 IP：${detectedWechatIp}`);
+					});
+			});
+
 		new Setting(containerEl)
 			.setName("作者")
 			.setDesc("写入微信草稿的 author 字段，可留空。")
@@ -1652,6 +1731,63 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 				.onClick(() => {
 					this.display();
 				}));
+	}
+}
+
+class WechatIpWhitelistModal extends Modal {
+	constructor(
+		app: App,
+		private error: WechatIpWhitelistError
+	) {
+		super(app);
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		const hasDetectedIp = Boolean(this.error.ip);
+		contentEl.addClass("obsidian-to-publish-wechat-ip-modal");
+		contentEl.createEl("h2", { text: "微信公众号 IP 白名单未配置" });
+		contentEl.createEl("p", {
+			text: hasDetectedIp
+				? "微信接口拒绝了当前出口 IP。请复制下方 IP，然后前往微信开发者平台将其加入 API IP 白名单。"
+				: "微信接口拒绝了当前出口 IP，但错误信息中没有可识别的 IPv4。请先使用设置页的“检测微信出口 IP”。"
+		});
+		if (hasDetectedIp) {
+			contentEl.createEl("code", {
+				cls: "obsidian-to-publish-wechat-ip-value",
+				text: this.error.ip
+			});
+		}
+		contentEl.createEl("p", {
+			cls: "obsidian-to-publish-wechat-ip-route",
+			text: "路径：选择对应公众号 → 基础信息 → 开发密钥 → API IP 白名单"
+		});
+
+		const actions = contentEl.createDiv({ cls: "obsidian-to-publish-wechat-ip-actions" });
+		if (hasDetectedIp) {
+			const copyButton = actions.createEl("button", {
+				cls: "mod-cta",
+				text: "复制 IP"
+			});
+			copyButton.addEventListener("click", async () => {
+				await writeTextClipboard(this.error.ip);
+				new Notice(`已复制 IP：${this.error.ip}`);
+			});
+		}
+
+		const openButton = actions.createEl("button", { text: "打开微信开发者平台" });
+		openButton.addEventListener("click", async () => {
+			if (!await openExternalUrl(WECHAT_DEVELOPER_PLATFORM_URL)) {
+				new Notice("无法自动打开微信开发者平台，请在浏览器中手动访问 developers.weixin.qq.com/platform。");
+			}
+		});
+
+		const closeButton = actions.createEl("button", { text: "关闭" });
+		closeButton.addEventListener("click", () => this.close());
+	}
+
+	onClose() {
+		this.contentEl.empty();
 	}
 }
 
@@ -2122,6 +2258,21 @@ function isSafeEditorUrl(url: string): boolean {
 	try {
 		return new URL(url).protocol === "https:";
 	} catch {
+		return false;
+	}
+}
+
+async function openExternalUrl(url: string): Promise<boolean> {
+	if (!isSafeEditorUrl(url)) {
+		return false;
+	}
+	if (Platform.isDesktopApp && await openUrlWithElectronShell(url)) {
+		return true;
+	}
+	try {
+		return window.open(url, "_blank", "noopener,noreferrer") !== null;
+	} catch (error) {
+		console.error(`Unable to open external URL: ${url}`, error);
 		return false;
 	}
 }

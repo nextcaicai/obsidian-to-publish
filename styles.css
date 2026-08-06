@@ -92,3 +92,28 @@
 .obsidian-to-publish-content .code-copy-button {
 	display: none !important;
 }
+
+.obsidian-to-publish-wechat-ip-value {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	display: block;
+	font-size: var(--font-ui-medium);
+	font-weight: 600;
+	margin: 12px 0;
+	padding: 10px 12px;
+	user-select: all;
+}
+
+.obsidian-to-publish-wechat-ip-route {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.obsidian-to-publish-wechat-ip-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	justify-content: flex-end;
+	margin-top: 20px;
+}

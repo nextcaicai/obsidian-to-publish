@@ -11,7 +11,10 @@ import type { OfficialRequest, OfficialRequestResponse } from "../src/publishing
 import type { PublishAsset, PublishPackageV1 } from "../src/publishing/types";
 import {
 	createWechatDraftFromPackage,
-	replaceHtmlImageSourcesWithWechatUrls
+	detectWechatOutboundIp,
+	replaceHtmlImageSourcesWithWechatUrls,
+	upsertWechatCoverMediaRecord,
+	upsertWechatDraftRecord
 } from "../src/publishing/wechat-official";
 
 const imageAsset: PublishAsset = {
@@ -50,6 +53,21 @@ function createPackage(): PublishPackageV1 {
 			overwriteExistingDraft: "ask",
 			uploadRemoteImages: "never"
 		}
+	};
+}
+
+function createWechatSettings() {
+	return {
+		enabled: true,
+		appId: "wx-app",
+		appSecret: "secret",
+		author: "Author",
+		digest: "",
+		contentSourceUrl: "",
+		openComment: false,
+		onlyFansCanComment: false,
+		draftRecords: [],
+		coverMediaRecords: []
 	};
 }
 
@@ -137,16 +155,7 @@ describe("official publishing", () => {
 			throw new Error(`Unexpected URL: ${options.url}`);
 		};
 
-		const result = await createWechatDraftFromPackage(createPackage(), {
-			enabled: true,
-			appId: "wx-app",
-			appSecret: "secret",
-			author: "Author",
-			digest: "",
-			contentSourceUrl: "",
-			openComment: false,
-			onlyFansCanComment: false
-		}, request);
+		const result = await createWechatDraftFromPackage(createPackage(), createWechatSettings(), request);
 		const draftRequest = requests.find((item) => item.url.includes("/draft/add"));
 		const draftPayload = JSON.parse(String(draftRequest?.body || "{}"));
 
@@ -166,18 +175,205 @@ describe("official publishing", () => {
 			}
 		});
 
-		await expect(createWechatDraftFromPackage(createPackage(), {
-			enabled: true,
-			appId: "wx-app",
-			appSecret: "secret",
-			author: "",
-			digest: "",
-			contentSourceUrl: "",
-			openComment: false,
-			onlyFansCanComment: false
-		}, request)).rejects.toThrow(
+		await expect(createWechatDraftFromPackage(createPackage(), createWechatSettings(), request)).rejects.toThrow(
 			"103.116.123.196 未加入微信公众号 API IP 白名单"
 		);
+	});
+
+	it("detects the exact outbound IP reported by WeChat", async () => {
+		const result = await detectWechatOutboundIp(createWechatSettings(), async () => ({
+			status: 200,
+			json: {
+				errcode: 40164,
+				errmsg: "invalid ip 120.241.117.188 ipv6 ::ffff:120.241.117.188, not in whitelist"
+			}
+		}));
+
+		expect(result).toEqual({
+			ip: "120.241.117.188",
+			source: "wechat"
+		});
+	});
+
+	it("falls back to a public IPv4 detector when WeChat omits the rejected IP", async () => {
+		const result = await detectWechatOutboundIp(createWechatSettings(), async (options) => {
+			if (options.url.includes("/token?")) {
+				return {
+					status: 200,
+					json: {
+						errcode: 40164,
+						errmsg: "request ip not in whitelist"
+					}
+				};
+			}
+			if (options.url.includes("api.ipify.org")) {
+				return { status: 200, json: { ip: "203.0.113.9" } };
+			}
+			throw new Error(`Unexpected URL: ${options.url}`);
+		});
+
+		expect(result).toEqual({
+			ip: "203.0.113.9",
+			source: "ipify"
+		});
+	});
+
+	it("reuses a valid cover and updates the draft associated with the note", async () => {
+		const requests: Array<{ url: string; body?: string | ArrayBuffer }> = [];
+		const settings = createWechatSettings();
+		settings.coverMediaRecords = [{
+			appId: "wx-app",
+			assetHash: "sha256:706e6721",
+			mediaId: "cached-cover",
+			updatedAt: "2026-08-05T00:00:00.000Z"
+		}];
+		settings.draftRecords = [{
+			appId: "wx-app",
+			notePath: "posts/demo.md",
+			mediaId: "existing-draft",
+			title: "Demo title",
+			updatedAt: "2026-08-05T00:00:00.000Z"
+		}];
+		const request: OfficialRequest = async (options) => {
+			requests.push({ url: options.url, body: options.body });
+			if (options.url.includes("/token?")) {
+				return { status: 200, json: { access_token: "token", expires_in: 7200 } };
+			}
+			if (options.url.includes("/material/get_material")) {
+				return { status: 200, arrayBuffer: Buffer.from("image").buffer };
+			}
+			if (options.url.includes("/media/uploadimg")) {
+				return { status: 200, json: { url: "https://mmbiz.qpic.cn/local" } };
+			}
+			if (options.url.includes("/draft/update")) {
+				return { status: 200, json: { errcode: 0, errmsg: "ok" } };
+			}
+			throw new Error(`Unexpected URL: ${options.url}`);
+		};
+
+		const result = await createWechatDraftFromPackage(createPackage(), settings, request, {
+			fingerprintAsset: async () => "sha256:706e6721"
+		});
+
+		expect(result.action).toBe("updated");
+		expect(result.mediaId).toBe("existing-draft");
+		expect(result.coverMediaRecord.mediaId).toBe("cached-cover");
+		expect(requests.some((item) => item.url.includes("/material/add_material"))).toBe(false);
+		expect(requests.some((item) => item.url.includes("/draft/add"))).toBe(false);
+	});
+
+	it("reuploads an invalid cached cover and recreates a missing draft", async () => {
+		const settings = createWechatSettings();
+		settings.coverMediaRecords = [{
+			appId: "wx-app",
+			assetHash: "sha256:706e6721",
+			mediaId: "deleted-cover",
+			updatedAt: "2026-08-05T00:00:00.000Z"
+		}];
+		settings.draftRecords = [{
+			appId: "wx-app",
+			notePath: "posts/demo.md",
+			mediaId: "deleted-draft",
+			title: "Demo title",
+			updatedAt: "2026-08-05T00:00:00.000Z"
+		}];
+		const request: OfficialRequest = async (options) => {
+			if (options.url.includes("/token?")) {
+				return { status: 200, json: { access_token: "token", expires_in: 7200 } };
+			}
+			if (options.url.includes("/material/get_material")) {
+				return { status: 200, json: { errcode: 40007, errmsg: "invalid media_id" } };
+			}
+			if (options.url.includes("/material/add_material")) {
+				return { status: 200, json: { media_id: "new-cover" } };
+			}
+			if (options.url.includes("/media/uploadimg")) {
+				return { status: 200, json: { url: "https://mmbiz.qpic.cn/local" } };
+			}
+			if (options.url.includes("/draft/update")) {
+				return { status: 200, json: { errcode: 40007, errmsg: "invalid media_id" } };
+			}
+			if (options.url.includes("/draft/add")) {
+				return { status: 200, json: { media_id: "new-draft" } };
+			}
+			throw new Error(`Unexpected URL: ${options.url}`);
+		};
+
+		const result = await createWechatDraftFromPackage(createPackage(), settings, request, {
+			fingerprintAsset: async () => "sha256:706e6721"
+		});
+
+		expect(result.action).toBe("created");
+		expect(result.mediaId).toBe("new-draft");
+		expect(result.coverMediaRecord.mediaId).toBe("new-cover");
+	});
+
+	it("downloads remote images and keeps them in their original HTML positions", async () => {
+		const pkg = createPackage();
+		pkg.article.html = '<html><body><section><p><img src="https://images.example.com/remote.png"></p><p><img src="data:image/png;base64,abc"></p></section></body></html>';
+		const request: OfficialRequest = async (options) => {
+			if (options.url.includes("/token?")) {
+				return { status: 200, json: { access_token: "token", expires_in: 7200 } };
+			}
+			if (options.url.includes("/material/add_material")) {
+				return { status: 200, json: { media_id: "cover" } };
+			}
+			if (options.url === "https://images.example.com/remote.png") {
+				return {
+					status: 200,
+					headers: { "content-type": "image/png" },
+					arrayBuffer: Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]).buffer
+				};
+			}
+			if (options.url.includes("/media/uploadimg")) {
+				const uploads = uploadRequests++;
+				return {
+					status: 200,
+					json: { url: uploads === 0 ? "https://mmbiz.qpic.cn/local" : "https://mmbiz.qpic.cn/remote" }
+				};
+			}
+			if (options.url.includes("/draft/add")) {
+				const body = JSON.parse(String(options.body));
+				draftContent = body.articles[0].content;
+				return { status: 200, json: { media_id: "draft" } };
+			}
+			throw new Error(`Unexpected URL: ${options.url}`);
+		};
+		let uploadRequests = 0;
+		let draftContent = "";
+
+		const result = await createWechatDraftFromPackage(pkg, createWechatSettings(), request);
+
+		expect(result.uploadedImages).toBe(2);
+		expect(draftContent.indexOf("https://mmbiz.qpic.cn/remote"))
+			.toBeLessThan(draftContent.indexOf("https://mmbiz.qpic.cn/local"));
+		expect(draftContent).not.toContain("images.example.com");
+		expect(result.warnings).toEqual([]);
+	});
+
+	it("keeps only the latest cached record for the same account and source", () => {
+		const draftRecords = upsertWechatDraftRecord([], {
+			appId: "wx-app",
+			notePath: "posts/demo.md",
+			mediaId: "draft-1",
+			title: "Demo",
+			updatedAt: "2026-08-05T00:00:00.000Z"
+		});
+		const coverRecords = upsertWechatCoverMediaRecord([], {
+			appId: "wx-app",
+			assetHash: "sha256:abc",
+			mediaId: "cover-1",
+			updatedAt: "2026-08-05T00:00:00.000Z"
+		});
+
+		expect(upsertWechatDraftRecord(draftRecords, {
+			...draftRecords[0],
+			mediaId: "draft-2"
+		})).toHaveLength(1);
+		expect(upsertWechatCoverMediaRecord(coverRecords, {
+			...coverRecords[0],
+			mediaId: "cover-2"
+		})).toHaveLength(1);
 	});
 
 	it("parses Feishu folder URLs and preserves raw tokens", () => {
