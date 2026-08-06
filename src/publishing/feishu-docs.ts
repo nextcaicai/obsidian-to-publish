@@ -29,7 +29,14 @@ export interface FeishuDocSyncResult {
 	token: string;
 	url: string;
 	replacedAssetImages: number;
+	uploadedImages: number;
 	warnings: string[];
+}
+
+export interface FeishuImageMarker {
+	assetId: string;
+	marker: string;
+	alt: string;
 }
 
 interface FeishuImportTaskResult {
@@ -37,6 +44,20 @@ interface FeishuImportTaskResult {
 	jobErrorMessage: string;
 	token: string;
 	url: string;
+}
+
+interface FeishuDocumentBlock {
+	blockId: string;
+	parentId: string;
+	children: string[];
+	blockType: number;
+	text: string;
+}
+
+interface FeishuImageUploadResult {
+	uploadedImages: number;
+	failedImages: number;
+	warnings: string[];
 }
 
 export const DEFAULT_FEISHU_DOCS_SETTINGS: FeishuDocsSettings = {
@@ -49,6 +70,10 @@ export const DEFAULT_FEISHU_DOCS_SETTINGS: FeishuDocsSettings = {
 
 const FEISHU_API_BASE_URL = "https://open.feishu.cn/open-apis";
 const FEISHU_MARKDOWN_LIMIT_BYTES = 20 * 1024 * 1024;
+const FEISHU_MEDIA_LIMIT_BYTES = 20 * 1024 * 1024;
+const FEISHU_IMAGE_MARKER_PREFIX = "OTP_IMG:";
+const FEISHU_DOCUMENT_MUTATION_GAP_MS = 350;
+const FEISHU_IMAGE_BLOCK_TYPE = 27;
 
 export function normalizeFeishuDocsSettings(value: unknown): FeishuDocsSettings {
 	const raw = isRecord(value) ? value : {};
@@ -80,6 +105,10 @@ export async function syncPackageToFeishuDoc(
 	const ticket = await client.createImportTask(publishPackage.article.title || publishPackage.note.basename, fileToken);
 	const result = await client.waitForImportTask(ticket);
 
+	const imageUpload = preparedMarkdown.imageMarkers.length > 0
+		? await client.uploadImagesToDocument(result.token, preparedMarkdown.imageMarkers, publishPackage.assets)
+		: { uploadedImages: 0, failedImages: 0, warnings: [] as string[] };
+
 	if (normalizedSettings.ownerUserId) {
 		await client.transferDocumentOwnership(result.token, normalizedSettings.ownerUserId);
 	}
@@ -88,7 +117,8 @@ export async function syncPackageToFeishuDoc(
 		token: result.token,
 		url: result.url,
 		replacedAssetImages: preparedMarkdown.replacedAssetImages,
-		warnings: preparedMarkdown.warnings
+		uploadedImages: imageUpload.uploadedImages,
+		warnings: [...preparedMarkdown.warnings, ...imageUpload.warnings]
 	};
 }
 
@@ -96,9 +126,10 @@ export function prepareFeishuMarkdown(publishPackage: PublishPackageV1): {
 	markdown: string;
 	bytes: Uint8Array;
 	replacedAssetImages: number;
+	imageMarkers: FeishuImageMarker[];
 	warnings: string[];
 } {
-	const replaced = replaceAssetImageMarkdownWithPlaceholders(
+	const replaced = replaceAssetImageMarkdownWithMarkers(
 		publishPackage.article.markdown,
 		publishPackage.assets
 	);
@@ -107,31 +138,69 @@ export function prepareFeishuMarkdown(publishPackage: PublishPackageV1): {
 		markdown,
 		bytes: new TextEncoder().encode(markdown || publishPackage.article.title || publishPackage.note.basename),
 		replacedAssetImages: replaced.replacedAssetImages,
+		imageMarkers: replaced.imageMarkers,
 		warnings: replaced.warnings
 	};
 }
 
+export function replaceAssetImageMarkdownWithMarkers(markdown: string, assets: PublishAsset[]): {
+	markdown: string;
+	replacedAssetImages: number;
+	imageMarkers: FeishuImageMarker[];
+	warnings: string[];
+} {
+	const imageMarkers: FeishuImageMarker[] = [];
+	const assetById = new Map(assets.map((asset) => [asset.id, asset]));
+	const warnings: string[] = [];
+	const output = String(markdown || "").replace(/!\[([^\]]*)]\(asset:\/\/([A-Za-z0-9_-]+)\)/g, (_match, alt: string, assetId: string) => {
+		const asset = assetById.get(assetId);
+		const label = (alt || asset?.fileName || assetId).trim();
+		const marker = createFeishuImageMarker(assetId);
+		imageMarkers.push({
+			assetId,
+			marker,
+			alt: label
+		});
+		if (!asset) {
+			warnings.push(`飞书同步缺少本地图片资源：${label || assetId}`);
+		}
+		// Keep markers on their own lines so markdown import creates locatable text blocks.
+		return `\n\n${marker}\n\n`;
+	});
+
+	return {
+		markdown: output,
+		replacedAssetImages: imageMarkers.length,
+		imageMarkers,
+		warnings
+	};
+}
+
+/** @deprecated Prefer replaceAssetImageMarkdownWithMarkers; kept for existing call sites. */
 export function replaceAssetImageMarkdownWithPlaceholders(markdown: string, assets: PublishAsset[]): {
 	markdown: string;
 	replacedAssetImages: number;
 	warnings: string[];
 } {
-	let replacedAssetImages = 0;
-	const assetById = new Map(assets.map((asset) => [asset.id, asset]));
-	const output = String(markdown || "").replace(/!\[([^\]]*)]\(asset:\/\/([A-Za-z0-9_-]+)\)/g, (_match, alt: string, assetId: string) => {
-		const asset = assetById.get(assetId);
-		replacedAssetImages += 1;
-		const label = (alt || asset?.fileName || assetId).trim();
-		return `> 图片待补：${label}`;
-	});
-
+	const result = replaceAssetImageMarkdownWithMarkers(markdown, assets);
 	return {
-		markdown: output,
-		replacedAssetImages,
-		warnings: replacedAssetImages > 0
-			? [`飞书第一版导入已保留 ${replacedAssetImages} 个本地图片位置，但尚未自动上传图片块。`]
-			: []
+		markdown: result.markdown,
+		replacedAssetImages: result.replacedAssetImages,
+		warnings: result.warnings
 	};
+}
+
+export function createFeishuImageMarker(assetId: string): string {
+	return `${FEISHU_IMAGE_MARKER_PREFIX}${String(assetId || "").trim()}`;
+}
+
+export function parseFeishuImageMarker(text: string): string | null {
+	const normalized = String(text || "").trim();
+	if (!normalized.startsWith(FEISHU_IMAGE_MARKER_PREFIX)) {
+		return null;
+	}
+	const assetId = normalized.slice(FEISHU_IMAGE_MARKER_PREFIX.length).trim();
+	return assetId || null;
 }
 
 export function parseFeishuFolderToken(value: unknown): string {
@@ -348,6 +417,297 @@ export class FeishuDocsClient {
 		}
 	}
 
+	async uploadImagesToDocument(
+		documentId: string,
+		imageMarkers: FeishuImageMarker[],
+		assets: PublishAsset[]
+	): Promise<FeishuImageUploadResult> {
+		if (imageMarkers.length === 0) {
+			return { uploadedImages: 0, failedImages: 0, warnings: [] };
+		}
+
+		const assetById = new Map(assets.map((asset) => [asset.id, asset]));
+		const pendingByMarker = new Map(imageMarkers.map((item) => [item.marker, item]));
+		const warnings: string[] = [];
+		let uploadedImages = 0;
+		let failedImages = 0;
+
+		// Process one image at a time and re-list blocks so sibling indexes stay accurate.
+		while (pendingByMarker.size > 0) {
+			const blocks = await this.listDocumentBlocks(documentId);
+			const blockById = new Map(blocks.map((block) => [block.blockId, block]));
+			const markerBlocks = blocks
+				.map((block) => {
+					const assetId = parseFeishuImageMarker(block.text);
+					if (!assetId) {
+						return null;
+					}
+					const marker = createFeishuImageMarker(assetId);
+					const imageMarker = pendingByMarker.get(marker);
+					if (!imageMarker) {
+						return null;
+					}
+					const parent = blockById.get(block.parentId);
+					const index = parent ? parent.children.indexOf(block.blockId) : -1;
+					if (index < 0) {
+						return null;
+					}
+					return {
+						imageMarker,
+						block,
+						parentId: block.parentId,
+						index
+					};
+				})
+				.filter((item): item is {
+					imageMarker: FeishuImageMarker;
+					block: FeishuDocumentBlock;
+					parentId: string;
+					index: number;
+				} => Boolean(item))
+				// High index first so earlier sibling indexes stay valid within the same parent.
+				.sort((left, right) => {
+					if (left.parentId === right.parentId) {
+						return right.index - left.index;
+					}
+					return left.parentId.localeCompare(right.parentId);
+				});
+
+			if (markerBlocks.length === 0) {
+				for (const leftover of pendingByMarker.values()) {
+					failedImages += 1;
+					warnings.push(`飞书文档中未找到图片标记：${leftover.alt || leftover.assetId}`);
+				}
+				break;
+			}
+
+			const next = markerBlocks[0];
+			pendingByMarker.delete(next.imageMarker.marker);
+
+			const asset = assetById.get(next.imageMarker.assetId);
+			if (!asset) {
+				failedImages += 1;
+				warnings.push(`飞书图片上传缺少资源：${next.imageMarker.alt || next.imageMarker.assetId}`);
+				continue;
+			}
+
+			try {
+				assertFeishuImageAsset(asset);
+				await this.paceDocumentMutation();
+				const imageBlockId = await this.createImageBlock(documentId, next.parentId, next.index);
+				const fileToken = await this.uploadImageMedia(documentId, imageBlockId, asset);
+				await this.paceDocumentMutation();
+				await this.replaceImageBlockToken(documentId, imageBlockId, fileToken);
+				await this.paceDocumentMutation();
+				// Creating the image at the marker index pushes the marker one position forward.
+				await this.deleteChildAtIndex(documentId, next.parentId, next.index + 1);
+				uploadedImages += 1;
+			} catch (error) {
+				failedImages += 1;
+				const message = error instanceof Error ? error.message : String(error || "未知错误");
+				warnings.push(`飞书图片上传失败（${next.imageMarker.alt || next.imageMarker.assetId}）：${redactSensitiveText(message)}`);
+			}
+		}
+
+		if (failedImages > 0) {
+			warnings.unshift(`飞书图片上传完成：成功 ${uploadedImages} 张，失败 ${failedImages} 张。`);
+		}
+
+		return {
+			uploadedImages,
+			failedImages,
+			warnings
+		};
+	}
+
+	async listDocumentBlocks(documentId: string): Promise<FeishuDocumentBlock[]> {
+		const token = await this.getAccessToken();
+		const blocks: FeishuDocumentBlock[] = [];
+		let pageToken = "";
+
+		do {
+			const query = new URLSearchParams({
+				page_size: "500",
+				document_revision_id: "-1"
+			});
+			if (pageToken) {
+				query.set("page_token", pageToken);
+			}
+			const url = `${FEISHU_API_BASE_URL}/docx/v1/documents/${encodeURIComponent(documentId)}/blocks?${query.toString()}`;
+			const response = await this.sendRequest("获取飞书文档块", {
+				url,
+				method: "GET",
+				headers: {
+					"Authorization": `Bearer ${token}`,
+					"Content-Type": "application/json; charset=utf-8"
+				}
+			});
+			const data = responseJsonRecord(response);
+			if (data.code !== 0) {
+				throw createApiError("获取飞书文档块", data.code, data.msg);
+			}
+
+			const payload = getNestedRecord(data, ["data"]) ?? {};
+			const items = Array.isArray(payload.items) ? payload.items : [];
+			for (const item of items) {
+				if (!isRecord(item)) {
+					continue;
+				}
+				const blockId = typeof item.block_id === "string" ? item.block_id : "";
+				if (!blockId) {
+					continue;
+				}
+				blocks.push({
+					blockId,
+					parentId: typeof item.parent_id === "string" ? item.parent_id : "",
+					children: Array.isArray(item.children)
+						? item.children.filter((child): child is string => typeof child === "string")
+						: [],
+					blockType: typeof item.block_type === "number" ? item.block_type : 0,
+					text: extractFeishuBlockText(item)
+				});
+			}
+
+			pageToken = typeof payload.page_token === "string" && payload.has_more
+				? payload.page_token
+				: "";
+		} while (pageToken);
+
+		return blocks;
+	}
+
+	async createImageBlock(documentId: string, parentBlockId: string, index: number): Promise<string> {
+		const token = await this.getAccessToken();
+		const url = `${FEISHU_API_BASE_URL}/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(parentBlockId)}/children?document_revision_id=-1`;
+		const response = await this.sendRequest("创建飞书图片块", {
+			url,
+			method: "POST",
+			headers: {
+				"Authorization": `Bearer ${token}`,
+				"Content-Type": "application/json; charset=utf-8"
+			},
+			body: JSON.stringify({
+				index,
+				children: [
+					{
+						block_type: FEISHU_IMAGE_BLOCK_TYPE,
+						image: {}
+					}
+				]
+			})
+		});
+		const data = responseJsonRecord(response);
+		if (data.code !== 0) {
+			throw createApiError("创建飞书图片块", data.code, data.msg);
+		}
+
+		const children = getNestedRecord(data, ["data"])?.children;
+		if (!Array.isArray(children) || children.length === 0 || !isRecord(children[0])) {
+			throw new Error("飞书创建图片块未返回 block_id。");
+		}
+		const blockId = typeof children[0].block_id === "string" ? children[0].block_id.trim() : "";
+		if (!blockId) {
+			throw new Error("飞书创建图片块未返回 block_id。");
+		}
+		return blockId;
+	}
+
+	async uploadImageMedia(documentId: string, imageBlockId: string, asset: PublishAsset): Promise<string> {
+		const token = await this.getAccessToken();
+		const bytes = base64ToBytes(asset.base64);
+		if (bytes.byteLength > FEISHU_MEDIA_LIMIT_BYTES) {
+			throw new Error(`图片超过飞书 20MB 限制：${asset.fileName || asset.id}`);
+		}
+		if (bytes.byteLength === 0) {
+			throw new Error(`图片内容为空：${asset.fileName || asset.id}`);
+		}
+
+		const fileName = safeImageFileName(asset);
+		const boundary = `obsidian-to-publish-feishu-img-${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+		const body = buildMultipartBody({
+			boundary,
+			fields: {
+				file_name: fileName,
+				parent_type: "docx_image",
+				parent_node: imageBlockId,
+				size: String(bytes.byteLength),
+				extra: JSON.stringify({
+					drive_route_token: documentId
+				})
+			},
+			file: {
+				fileName,
+				mimeType: normalizeImageMime(asset.mime),
+				bytes
+			}
+		});
+		const response = await this.sendRequest("上传飞书图片素材", {
+			url: `${FEISHU_API_BASE_URL}/drive/v1/medias/upload_all`,
+			method: "POST",
+			headers: {
+				"Authorization": `Bearer ${token}`,
+				"Content-Type": `multipart/form-data; boundary=${boundary}`
+			},
+			body
+		});
+		const data = responseJsonRecord(response);
+		if (data.code !== 0) {
+			throw createApiError("上传飞书图片素材", data.code, data.msg);
+		}
+
+		return getNestedString(data, ["data", "file_token"], "飞书上传图片素材未返回 file_token。");
+	}
+
+	async replaceImageBlockToken(documentId: string, imageBlockId: string, fileToken: string): Promise<void> {
+		const token = await this.getAccessToken();
+		const url = `${FEISHU_API_BASE_URL}/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(imageBlockId)}?document_revision_id=-1`;
+		const response = await this.sendRequest("设置飞书图片块素材", {
+			url,
+			method: "PATCH",
+			headers: {
+				"Authorization": `Bearer ${token}`,
+				"Content-Type": "application/json; charset=utf-8"
+			},
+			body: JSON.stringify({
+				replace_image: {
+					token: fileToken
+				}
+			})
+		});
+		const data = responseJsonRecord(response);
+		if (data.code !== 0) {
+			throw createApiError("设置飞书图片块素材", data.code, data.msg);
+		}
+	}
+
+	async deleteChildAtIndex(documentId: string, parentBlockId: string, index: number): Promise<void> {
+		if (index < 0) {
+			return;
+		}
+		const token = await this.getAccessToken();
+		const url = `${FEISHU_API_BASE_URL}/docx/v1/documents/${encodeURIComponent(documentId)}/blocks/${encodeURIComponent(parentBlockId)}/children/batch_delete?document_revision_id=-1`;
+		const response = await this.sendRequest("删除飞书图片标记块", {
+			url,
+			method: "DELETE",
+			headers: {
+				"Authorization": `Bearer ${token}`,
+				"Content-Type": "application/json; charset=utf-8"
+			},
+			body: JSON.stringify({
+				start_index: index,
+				end_index: index + 1
+			})
+		});
+		const data = responseJsonRecord(response);
+		if (data.code !== 0) {
+			throw createApiError("删除飞书图片标记块", data.code, data.msg);
+		}
+	}
+
+	private async paceDocumentMutation(): Promise<void> {
+		await this.wait(FEISHU_DOCUMENT_MUTATION_GAP_MS);
+	}
+
 	private async sendRequest(label: string, options: OfficialRequestOptions) {
 		let response;
 		try {
@@ -409,6 +769,108 @@ function safeFileName(value: string): string {
 		.slice(0, 120)
 		.trim();
 	return normalized || "Obsidian 文档";
+}
+
+function safeImageFileName(asset: PublishAsset): string {
+	const extension = getImageExtension(asset);
+	const baseName = String(asset.fileName || asset.id || "image")
+		.trim()
+		.replace(/[\\/:*?"<>|\r\n]+/g, "_")
+		.replace(/\s+/g, " ")
+		.replace(/\.[a-z0-9]+$/i, "")
+		.slice(0, 80)
+		.trim();
+	return `${baseName || "image"}.${extension}`;
+}
+
+function getImageExtension(asset: PublishAsset): string {
+	const mime = normalizeImageMime(asset.mime);
+	if (mime === "image/png") return "png";
+	if (mime === "image/gif") return "gif";
+	if (mime === "image/webp") return "webp";
+	if (mime === "image/bmp") return "bmp";
+	if (mime === "image/svg+xml") return "svg";
+	const fromName = String(asset.fileName || "").match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+	if (fromName && /^[a-z0-9]+$/.test(fromName)) {
+		return fromName;
+	}
+	return "jpg";
+}
+
+function normalizeImageMime(mime: string): string {
+	const normalized = String(mime || "").trim().toLowerCase();
+	if (normalized === "image/jpg") {
+		return "image/jpeg";
+	}
+	return normalized || "image/png";
+}
+
+function assertFeishuImageAsset(asset: PublishAsset): void {
+	if (!asset || asset.kind !== "image") {
+		throw new Error("飞书图片上传需要 image 类型资源。");
+	}
+	if (!asset.base64) {
+		throw new Error(`飞书图片资源缺少 base64 数据：${asset.fileName || asset.id}`);
+	}
+}
+
+function extractFeishuBlockText(block: Record<string, unknown>): string {
+	const chunks: string[] = [];
+	const visit = (value: unknown): void => {
+		if (!isRecord(value)) {
+			return;
+		}
+		if (Array.isArray(value.elements)) {
+			for (const element of value.elements) {
+				if (!isRecord(element)) {
+					continue;
+				}
+				const textRun = isRecord(element.text_run) ? element.text_run : null;
+				if (textRun && typeof textRun.content === "string") {
+					chunks.push(textRun.content);
+				}
+			}
+		}
+		for (const nested of Object.values(value)) {
+			if (isRecord(nested) && Array.isArray(nested.elements)) {
+				visit(nested);
+			}
+		}
+	};
+
+	// Common text-bearing keys from Feishu block payloads.
+	for (const key of [
+		"text",
+		"quote",
+		"heading1",
+		"heading2",
+		"heading3",
+		"heading4",
+		"heading5",
+		"heading6",
+		"heading7",
+		"heading8",
+		"heading9",
+		"bullet",
+		"ordered",
+		"todo",
+		"page"
+	]) {
+		if (key in block) {
+			visit(block[key]);
+		}
+	}
+
+	return chunks.join("").trim();
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+	const binary = atob(String(base64 || ""));
+	const bytes = new Uint8Array(binary.length);
+	for (let index = 0; index < binary.length; index += 1) {
+		bytes[index] = binary.charCodeAt(index);
+	}
+	return bytes;
 }
 
 function getNestedString(data: Record<string, unknown>, path: string[], errorMessage: string): string {

@@ -505,8 +505,13 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 			if (result.warnings.length > 0) {
 				console.warn("飞书云文档同步提示:", result.warnings);
 			}
+			const imageSuffix = result.uploadedImages > 0
+				? `（${result.uploadedImages} 张图片）`
+				: result.replacedAssetImages > 0
+					? "（本地图片未全部上传，详见控制台）"
+					: "";
 			const warningSuffix = result.warnings.length > 0 ? `，${result.warnings.length} 条提示见控制台` : "";
-			new Notice(`已同步到飞书云文档：${result.url}${warningSuffix}。`);
+			new Notice(`已同步到飞书云文档：${result.url}${imageSuffix}${warningSuffix}。`);
 		} catch (error) {
 			console.error(error);
 			new Notice(getErrorMessage(error, "同步到飞书云文档失败，请查看控制台。"));

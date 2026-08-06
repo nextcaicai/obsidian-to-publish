@@ -468,26 +468,39 @@ describe("official publishing", () => {
 		expect(parseFeishuFolderToken("fldraw")).toBe("fldraw");
 	});
 
-	it("keeps Feishu image positions explicit until block image upload is added", () => {
+	it("prepares Feishu image markers for post-import image block upload", () => {
 		const result = prepareFeishuMarkdown(createPackage());
 
-		expect(result.markdown).toContain("> 图片待补：Cover");
+		expect(result.markdown).toContain("OTP_IMG:asset_1");
+		expect(result.markdown).not.toContain("asset://asset_1");
 		expect(result.replacedAssetImages).toBe(1);
-		expect(result.warnings[0]).toContain("尚未自动上传图片块");
+		expect(result.imageMarkers).toEqual([
+			{
+				assetId: "asset_1",
+				marker: "OTP_IMG:asset_1",
+				alt: "Cover"
+			}
+		]);
 	});
 
-	it("imports Markdown into a Feishu cloud document", async () => {
-		const requests: Array<{ url: string; method: string }> = [];
+	it("imports Markdown into a Feishu cloud document and uploads local images", async () => {
+		const requests: Array<{ url: string; method: string; body?: string | ArrayBuffer }> = [];
+		let listedBlocks = 0;
 		const request: OfficialRequest = async (options) => {
 			requests.push({
 				url: options.url,
-				method: options.method || "GET"
+				method: options.method || "GET",
+				body: options.body
 			});
 			if (options.url.includes("/auth/v3/tenant_access_token/internal")) {
 				return { status: 200, json: { code: 0, tenant_access_token: "tenant-token", expire: 7200 } };
 			}
 			if (options.url.includes("/drive/v1/medias/upload_all")) {
-				return { status: 200, json: { code: 0, data: { file_token: "file-token" } } };
+				const bodyText = options.body instanceof ArrayBuffer
+					? Buffer.from(options.body).toString("utf8")
+					: String(options.body || "");
+				const fileToken = bodyText.includes("docx_image") ? "image-file-token" : "md-file-token";
+				return { status: 200, json: { code: 0, data: { file_token: fileToken } } };
 			}
 			if (options.url.endsWith("/drive/v1/import_tasks")) {
 				return { status: 200, json: { code: 0, data: { ticket: "ticket" } } };
@@ -507,6 +520,106 @@ describe("official publishing", () => {
 					}
 				};
 			}
+			if (options.url.includes("/docx/v1/documents/doc-token/blocks?") && (options.method || "GET") === "GET") {
+				listedBlocks += 1;
+				if (listedBlocks === 1) {
+					return {
+						status: 200,
+						json: {
+							code: 0,
+							data: {
+								has_more: false,
+								items: [
+									{
+										block_id: "doc-token",
+										parent_id: "",
+										block_type: 1,
+										children: ["text-1", "marker-1", "text-2"],
+										page: {
+											elements: [{ text_run: { content: "Demo title" } }]
+										}
+									},
+									{
+										block_id: "text-1",
+										parent_id: "doc-token",
+										block_type: 2,
+										children: [],
+										text: {
+											elements: [{ text_run: { content: "正文" } }]
+										}
+									},
+									{
+										block_id: "marker-1",
+										parent_id: "doc-token",
+										block_type: 2,
+										children: [],
+										text: {
+											elements: [{ text_run: { content: "OTP_IMG:asset_1" } }]
+										}
+									},
+									{
+										block_id: "text-2",
+										parent_id: "doc-token",
+										block_type: 2,
+										children: [],
+										text: {
+											elements: [{ text_run: { content: "结尾" } }]
+										}
+									}
+								]
+							}
+						}
+					};
+				}
+				return {
+					status: 200,
+					json: {
+						code: 0,
+						data: {
+							has_more: false,
+							items: [
+								{
+									block_id: "doc-token",
+									parent_id: "",
+									block_type: 1,
+									children: ["text-1", "image-1", "text-2"],
+									page: {
+										elements: [{ text_run: { content: "Demo title" } }]
+									}
+								}
+							]
+						}
+					}
+				};
+			}
+			if (options.url.includes("/docx/v1/documents/doc-token/blocks/doc-token/children") && (options.method || "GET") === "POST") {
+				return {
+					status: 200,
+					json: {
+						code: 0,
+						data: {
+							children: [
+								{
+									block_id: "image-1",
+									block_type: 27,
+									image: { token: "", width: 100, height: 100 }
+								}
+							]
+						}
+					}
+				};
+			}
+			if (options.url.includes("/docx/v1/documents/doc-token/blocks/image-1") && (options.method || "GET") === "PATCH") {
+				const payload = JSON.parse(String(options.body || "{}"));
+				expect(payload.replace_image.token).toBe("image-file-token");
+				return { status: 200, json: { code: 0, data: {} } };
+			}
+			if (options.url.includes("/children/batch_delete") && (options.method || "GET") === "DELETE") {
+				const payload = JSON.parse(String(options.body || "{}"));
+				expect(payload.start_index).toBe(2);
+				expect(payload.end_index).toBe(3);
+				return { status: 200, json: { code: 0, data: { document_revision_id: 2 } } };
+			}
 
 			throw new Error(`Unexpected URL: ${options.url}`);
 		};
@@ -521,8 +634,12 @@ describe("official publishing", () => {
 
 		expect(result.token).toBe("doc-token");
 		expect(result.url).toBe("https://example.feishu.cn/docx/doc-token");
-		expect(requests.some((item) => item.url.includes("/drive/v1/medias/upload_all"))).toBe(true);
+		expect(result.uploadedImages).toBe(1);
+		expect(result.replacedAssetImages).toBe(1);
 		expect(requests.some((item) => item.url.endsWith("/drive/v1/import_tasks"))).toBe(true);
+		expect(requests.some((item) => item.url.includes("/docx/v1/documents/doc-token/blocks/doc-token/children"))).toBe(true);
+		expect(requests.some((item) => item.url.includes("/blocks/image-1") && item.method === "PATCH")).toBe(true);
+		expect(requests.some((item) => item.url.includes("/children/batch_delete"))).toBe(true);
 		expect(requests.find((item) => item.url.includes("/drive/v1/import_tasks/ticket"))?.method).toBe("GET");
 	});
 
