@@ -477,8 +477,15 @@ function collectRemoteHtmlImageSources(html: string): string[] {
 	return sources;
 }
 
+/**
+ * Normalize HTML before uploading to WeChat draft API.
+ *
+ * WeChat's editor re-parses content and treats whitespace/newlines between
+ * block tags (especially inside ul/ol) as extra empty list items. That shows
+ * up as alternating empty bullets/numbers between real list content.
+ */
 export function normalizeWechatDraftHtml(html: string): string {
-	return String(html || "")
+	let result = String(html || "")
 		.replace(/<!doctype[^>]*>/gi, "")
 		.replace(/<\/?html\b[^>]*>/gi, "")
 		.replace(/<head\b[\s\S]*?<\/head>/gi, "")
@@ -486,6 +493,78 @@ export function normalizeWechatDraftHtml(html: string): string {
 		.replace(/<script\b[\s\S]*?<\/script>/gi, "")
 		.replace(/<style\b[\s\S]*?<\/style>/gi, "")
 		.trim();
+
+	result = unwrapWechatListItemParagraphs(result);
+	result = removeWechatEmptyListItems(result);
+	result = removeWechatEmptyParagraphs(result);
+	result = compactWechatBlockWhitespace(result);
+	return result;
+}
+
+const WECHAT_BLOCK_TAGS =
+	"li|ul|ol|p|h[1-6]|section|article|blockquote|figure|figcaption|table|tbody|thead|tfoot|tr|th|td|pre|hr|br|img|div";
+
+/**
+ * Collapse whitespace/newlines between block-level tags.
+ * WeChat treats those gaps as blank lines / empty list items.
+ */
+export function compactWechatBlockWhitespace(html: string): string {
+	const betweenCloseOpen = new RegExp(
+		`(</(?:${WECHAT_BLOCK_TAGS})>)\\s+(<(?:${WECHAT_BLOCK_TAGS})\\b[^>]*/?>)`,
+		"gi"
+	);
+	const betweenOpenOpen = new RegExp(
+		`(<(?:${WECHAT_BLOCK_TAGS})\\b[^>]*>)\\s+(<(?:${WECHAT_BLOCK_TAGS})\\b[^>]*/?>)`,
+		"gi"
+	);
+	const betweenCloseClose = new RegExp(
+		`(</(?:${WECHAT_BLOCK_TAGS})>)\\s+(</(?:${WECHAT_BLOCK_TAGS})>)`,
+		"gi"
+	);
+	// Trim leading/trailing whitespace inside list items.
+	const trimListItemOpen = /(<li\b[^>]*>)\s+/gi;
+	const trimListItemClose = /\s+(<\/li>)/gi;
+
+	let result = String(html || "");
+	let previous = "";
+	while (result !== previous) {
+		previous = result;
+		result = result
+			.replace(betweenCloseOpen, "$1$2")
+			.replace(betweenOpenOpen, "$1$2")
+			.replace(betweenCloseClose, "$1$2")
+			.replace(trimListItemOpen, "$1")
+			.replace(trimListItemClose, "$1");
+	}
+	return result;
+}
+
+/** Remove empty list items that only contain whitespace or a lone <br>. */
+export function removeWechatEmptyListItems(html: string): string {
+	let result = String(html || "");
+	let previous = "";
+	while (result !== previous) {
+		previous = result;
+		result = result.replace(/<li\b[^>]*>\s*(?:<br\s*\/?>\s*)*<\/li>/gi, "");
+	}
+	return result;
+}
+
+/** Remove empty paragraphs WeChat would turn into blank lines. */
+export function removeWechatEmptyParagraphs(html: string): string {
+	return String(html || "").replace(/<p\b[^>]*>\s*(?:<br\s*\/?>\s*)*<\/p>/gi, "");
+}
+
+/**
+ * Unwrap a sole <p> wrapper inside <li>.
+ * Loose-list HTML like <li><p>item</p></li> is frequently rewritten by WeChat
+ * into an empty bullet plus a content bullet.
+ */
+export function unwrapWechatListItemParagraphs(html: string): string {
+	return String(html || "").replace(
+		/<li(\b[^>]*)>\s*<p\b[^>]*>([\s\S]*?)<\/p>\s*<\/li>/gi,
+		(_match, attrs: string, content: string) => `<li${attrs}>${content.trim()}</li>`
+	);
 }
 
 export function inspectWechatDraftHtml(html: string): WechatDraftHtmlInspection {

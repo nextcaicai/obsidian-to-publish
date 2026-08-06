@@ -10,9 +10,13 @@ import { createHttpError, redactSensitiveText } from "../src/publishing/official
 import type { OfficialRequest, OfficialRequestResponse } from "../src/publishing/official-http";
 import type { PublishAsset, PublishPackageV1 } from "../src/publishing/types";
 import {
+	compactWechatBlockWhitespace,
 	createWechatDraftFromPackage,
 	detectWechatOutboundIp,
+	normalizeWechatDraftHtml,
+	removeWechatEmptyListItems,
 	replaceHtmlImageSourcesWithWechatUrls,
+	unwrapWechatListItemParagraphs,
 	upsertWechatCoverMediaRecord,
 	upsertWechatDraftRecord
 } from "../src/publishing/wechat-official";
@@ -128,6 +132,65 @@ describe("official publishing", () => {
 		expect(result.html).toContain('src="https://mmbiz.qpic.cn/sz_mmbiz_png/demo/0"');
 		expect(result.html).not.toContain("data:image");
 		expect(result.html).not.toContain("data-src");
+	});
+
+	it("compacts whitespace between list tags that WeChat turns into empty bullets", () => {
+		const source = [
+			"<ul>",
+			"<li>无序列表第一项</li>",
+			"",
+			"<li>无序列表第二项</li>",
+			"<li>无序列表第三项</li>",
+			"</ul>",
+			"<ol>",
+			"<li>有序列表第一项</li>",
+			"<li>有序列表第二项</li>",
+			"<li>有序列表第三项</li>",
+			"</ol>"
+		].join("\n");
+
+		const compacted = compactWechatBlockWhitespace(source);
+		expect(compacted).toBe(
+			"<ul><li>无序列表第一项</li><li>无序列表第二项</li><li>无序列表第三项</li></ul>"
+			+ "<ol><li>有序列表第一项</li><li>有序列表第二项</li><li>有序列表第三项</li></ol>"
+		);
+		expect(compacted).not.toMatch(/<\/li>\s+<li/);
+	});
+
+	it("removes empty list items and unwraps sole paragraphs inside li", () => {
+		expect(removeWechatEmptyListItems("<ul><li> </li><li>内容</li><li><br></li></ul>"))
+			.toBe("<ul><li>内容</li></ul>");
+		expect(unwrapWechatListItemParagraphs("<ul><li><p>段落项</p></li><li><p>第二项</p></li></ul>"))
+			.toBe("<ul><li>段落项</li><li>第二项</li></ul>");
+	});
+
+	it("normalizes draft HTML so lists stay compact for WeChat editor", () => {
+		const html = [
+			"<!DOCTYPE html>",
+			"<html><body>",
+			"<section>",
+			"<ul>",
+			"<li><p>无序列表第一项</p></li>",
+			"",
+			"<li> </li>",
+			"<li><p>无序列表第二项，包含 <code>inline code</code></p></li>",
+			"</ul>",
+			"<ol>",
+			"<li><p>有序列表第一项</p></li>",
+			"<li><p>有序列表第二项</p></li>",
+			"<li><p>有序列表第三项</p></li>",
+			"</ol>",
+			"</section>",
+			"</body></html>"
+		].join("\n");
+
+		const normalized = normalizeWechatDraftHtml(html);
+		expect(normalized).toContain("<ul><li>无序列表第一项</li><li>无序列表第二项，包含 <code>inline code</code></li></ul>");
+		expect(normalized).toContain("<ol><li>有序列表第一项</li><li>有序列表第二项</li><li>有序列表第三项</li></ol>");
+		expect(normalized).not.toMatch(/<li[^>]*>\s*<\/li>/);
+		expect(normalized).not.toMatch(/<li[^>]*>\s*<p\b/i);
+		expect(normalized).not.toContain("<!DOCTYPE");
+		expect(normalized).not.toContain("<body");
 	});
 
 	it("creates a WeChat draft from a publish package request sequence", async () => {

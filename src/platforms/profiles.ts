@@ -551,8 +551,51 @@ function transformWechatArticle(root: HTMLElement) {
 		appendInlineStyle(link, "color:#3f3f3f;text-decoration:none;");
 	}
 
+	normalizeWechatListDom(root);
+
 	for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>("p:empty"))) {
 		paragraph.remove();
+	}
+}
+
+/**
+ * Clean list DOM for WeChat.
+ * Whitespace text nodes between <li> and sole <p> wrappers become empty bullets
+ * after WeChat re-parses the HTML.
+ */
+function normalizeWechatListDom(root: HTMLElement) {
+	for (const list of Array.from(root.querySelectorAll("ul,ol"))) {
+		for (const node of Array.from(list.childNodes)) {
+			if (node.nodeType === Node.TEXT_NODE && !(node.textContent ?? "").trim()) {
+				node.remove();
+			}
+		}
+	}
+
+	for (const listItem of Array.from(root.querySelectorAll("li"))) {
+		const meaningfulChildren = Array.from(listItem.childNodes).filter((node) => {
+			if (node.nodeType === Node.TEXT_NODE) {
+				return Boolean((node.textContent ?? "").trim());
+			}
+			return true;
+		});
+
+		if (
+			meaningfulChildren.length === 1
+			&& meaningfulChildren[0] instanceof HTMLElement
+			&& meaningfulChildren[0].tagName === "P"
+		) {
+			const paragraph = meaningfulChildren[0];
+			while (paragraph.firstChild) {
+				listItem.insertBefore(paragraph.firstChild, paragraph);
+			}
+			paragraph.remove();
+		}
+
+		const hasMedia = Boolean(listItem.querySelector("img,table,pre,ul,ol,blockquote"));
+		if (!hasMedia && !(listItem.textContent ?? "").trim()) {
+			listItem.remove();
+		}
 	}
 }
 
