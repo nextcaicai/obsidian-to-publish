@@ -1186,6 +1186,9 @@ class WeChatPreviewCopyView extends ItemView {
 		}
 
 		this.removeRenderedAttachmentOpenLinks(clone, embeddedImageFiles);
+		removeObsidianRuntimeControls(clone);
+		// Flatten task items before platform styles so checkbox + text stay one line for WeChat.
+		normalizeTaskListItems(clone);
 		applyPlatformProfile(clone, targetPlatform);
 		this.removeRenderedAttachmentOpenLinks(clone, embeddedImageFiles);
 
@@ -1196,7 +1199,6 @@ class WeChatPreviewCopyView extends ItemView {
 			: 0;
 
 		removeObsidianRuntimeControls(clone);
-		replaceTaskCheckboxes(clone);
 		this.removeRenderedAttachmentOpenLinks(clone, embeddedImageFiles);
 		removeObsidianRuntimeAttributes(clone);
 
@@ -2002,13 +2004,92 @@ function appendInlineStyle(element: HTMLElement, declaration: string) {
 	);
 }
 
-function replaceTaskCheckboxes(root: HTMLElement) {
-	for (const input of Array.from(root.querySelectorAll<HTMLInputElement>("input[type='checkbox']"))) {
-		const marker = document.createElement("span");
-		marker.innerHTML = input.checked ? "&#9745;" : "&#9744;";
-		marker.setAttribute("style", "display:inline-block;width:1.3em;");
-		input.replaceWith(marker);
+/**
+ * Obsidian task items often render as:
+ *   <li class="task-list-item"><div|input checkbox></div>text</li>
+ * or with a block checkbox that forces a line break. WeChat then shows
+ * "• □" on one line and the text on the next (looks like empty bullets).
+ * Flatten each task item to a single-line "☐ text" / "☑ text".
+ */
+function normalizeTaskListItems(root: HTMLElement) {
+	const taskItems = Array.from(root.querySelectorAll<HTMLElement>("li")).filter(isTaskListItem);
+	if (taskItems.length === 0) {
+		// Still convert any leftover bare checkboxes for non-standard renders.
+		for (const input of Array.from(root.querySelectorAll<HTMLInputElement>("input[type='checkbox']"))) {
+			const marker = document.createElement("span");
+			marker.textContent = input.checked ? "☑" : "☐";
+			marker.setAttribute("style", "display:inline;white-space:nowrap;");
+			input.replaceWith(marker);
+		}
+		return;
 	}
+
+	for (const listItem of taskItems) {
+		const checked = isTaskListItemChecked(listItem);
+		const text = getTaskListItemPlainText(listItem);
+		const marker = checked ? "☑" : "☐";
+		const line = text ? `${marker} ${text}` : marker;
+		listItem.replaceChildren(document.createTextNode(line));
+		appendInlineStyle(listItem, "list-style-type:none;");
+		listItem.classList.add("task-list-item");
+		if (checked) {
+			listItem.classList.add("is-checked");
+		} else {
+			listItem.classList.remove("is-checked");
+		}
+	}
+
+	for (const list of Array.from(root.querySelectorAll<HTMLElement>("ul"))) {
+		const items = Array.from(list.children).filter((child) => child.tagName === "LI");
+		if (items.length > 0 && items.every((item) => item.classList.contains("task-list-item"))) {
+			appendInlineStyle(list, "list-style-type:none;padding-left:0.2em;");
+			list.classList.add("contains-task-list");
+		}
+	}
+}
+
+function isTaskListItem(listItem: HTMLElement): boolean {
+	if (
+		listItem.classList.contains("task-list-item")
+		|| listItem.hasAttribute("data-task")
+		|| listItem.querySelector("input[type='checkbox'],.task-list-item-checkbox")
+	) {
+		return true;
+	}
+	return false;
+}
+
+function isTaskListItemChecked(listItem: HTMLElement): boolean {
+	if (listItem.classList.contains("is-checked")) {
+		return true;
+	}
+	const dataTask = (listItem.getAttribute("data-task") || "").trim();
+	if (dataTask && dataTask !== " " && dataTask.toLowerCase() !== "n") {
+		// Obsidian uses data-task="x" / "X" / various done marks when checked.
+		return true;
+	}
+	const input = listItem.querySelector<HTMLInputElement>("input[type='checkbox']");
+	if (input?.checked) {
+		return true;
+	}
+	const custom = listItem.querySelector<HTMLElement>(".task-list-item-checkbox");
+	if (custom && (custom.classList.contains("is-checked") || custom.getAttribute("data-task"))) {
+		const customTask = (custom.getAttribute("data-task") || "").trim();
+		if (customTask && customTask !== " ") {
+			return true;
+		}
+	}
+	return false;
+}
+
+function getTaskListItemPlainText(listItem: HTMLElement): string {
+	const clone = listItem.cloneNode(true) as HTMLElement;
+	for (const node of Array.from(clone.querySelectorAll(
+		"input[type='checkbox'],.task-list-item-checkbox,.list-bullet,.list-collapse-indicator,.collapse-indicator"
+	))) {
+		node.remove();
+	}
+	return (clone.textContent || "").replace(/\s+/g, " ").trim();
 }
 
 function buildImageAttachmentTargetSet(files: TFile[]): Set<string> {

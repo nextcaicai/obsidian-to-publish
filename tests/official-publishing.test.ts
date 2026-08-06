@@ -13,7 +13,9 @@ import {
 	compactWechatBlockWhitespace,
 	createWechatDraftFromPackage,
 	detectWechatOutboundIp,
+	findWechatDraftRecord,
 	normalizeWechatDraftHtml,
+	normalizeWechatNotePath,
 	removeWechatEmptyListItems,
 	replaceHtmlImageSourcesWithWechatUrls,
 	unwrapWechatListItemParagraphs,
@@ -281,6 +283,18 @@ describe("official publishing", () => {
 		});
 	});
 
+	it("matches draft records by normalized note path", () => {
+		expect(normalizeWechatNotePath("./posts\\demo.md")).toBe("posts/demo.md");
+		const records = upsertWechatDraftRecord([], {
+			appId: "wx-app",
+			notePath: "./posts\\demo.md",
+			mediaId: "draft-1",
+			title: "Demo",
+			updatedAt: "2026-08-05T00:00:00.000Z"
+		});
+		expect(findWechatDraftRecord(records, "wx-app", "posts/demo.md")?.mediaId).toBe("draft-1");
+	});
+
 	it("reuses a valid cover and updates the draft associated with the note", async () => {
 		const requests: Array<{ url: string; body?: string | ArrayBuffer }> = [];
 		const settings = createWechatSettings();
@@ -308,6 +322,9 @@ describe("official publishing", () => {
 			if (options.url.includes("/media/uploadimg")) {
 				return { status: 200, json: { url: "https://mmbiz.qpic.cn/local" } };
 			}
+			if (options.url.includes("/draft/get")) {
+				return { status: 200, json: { news_item: [{ title: "Demo title" }] } };
+			}
 			if (options.url.includes("/draft/update")) {
 				return { status: 200, json: { errcode: 0, errmsg: "ok" } };
 			}
@@ -321,8 +338,11 @@ describe("official publishing", () => {
 		expect(result.action).toBe("updated");
 		expect(result.mediaId).toBe("existing-draft");
 		expect(result.coverMediaRecord.mediaId).toBe("cached-cover");
+		expect(result.draftRecord.notePath).toBe("posts/demo.md");
 		expect(requests.some((item) => item.url.includes("/material/add_material"))).toBe(false);
 		expect(requests.some((item) => item.url.includes("/draft/add"))).toBe(false);
+		expect(requests.some((item) => item.url.includes("/draft/get"))).toBe(true);
+		expect(requests.some((item) => item.url.includes("/draft/update"))).toBe(true);
 	});
 
 	it("reuploads an invalid cached cover and recreates a missing draft", async () => {
@@ -352,6 +372,9 @@ describe("official publishing", () => {
 			}
 			if (options.url.includes("/media/uploadimg")) {
 				return { status: 200, json: { url: "https://mmbiz.qpic.cn/local" } };
+			}
+			if (options.url.includes("/draft/get")) {
+				return { status: 200, json: { errcode: 40007, errmsg: "invalid media_id" } };
 			}
 			if (options.url.includes("/draft/update")) {
 				return { status: 200, json: { errcode: 40007, errmsg: "invalid media_id" } };

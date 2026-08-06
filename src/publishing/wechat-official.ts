@@ -142,14 +142,46 @@ export function normalizeWechatOfficialSettings(value: unknown): WechatOfficialS
 	};
 }
 
+export function normalizeWechatNotePath(path: string): string {
+	return String(path || "")
+		.trim()
+		.replace(/\\/g, "/")
+		.replace(/^\.\//, "")
+		.normalize("NFC");
+}
+
+export function findWechatDraftRecord(
+	records: WechatDraftRecord[],
+	appId: string,
+	notePath: string
+): WechatDraftRecord | null {
+	const normalizedAppId = normalizeOptionalString(appId);
+	const normalizedPath = normalizeWechatNotePath(notePath);
+	if (!normalizedAppId || !normalizedPath) {
+		return null;
+	}
+	return records.find((record) =>
+		record.appId === normalizedAppId && normalizeWechatNotePath(record.notePath) === normalizedPath
+	) ?? null;
+}
+
 export function upsertWechatDraftRecord(
 	records: WechatDraftRecord[],
 	record: WechatDraftRecord
 ): WechatDraftRecord[] {
+	const normalizedRecord: WechatDraftRecord = {
+		...record,
+		appId: normalizeOptionalString(record.appId),
+		notePath: normalizeWechatNotePath(record.notePath),
+		mediaId: normalizeOptionalString(record.mediaId),
+		title: normalizeOptionalString(record.title),
+		updatedAt: normalizeWechatRecordDate(record.updatedAt)
+	};
 	return [
-		record,
+		normalizedRecord,
 		...records.filter((item) =>
-			item.appId !== record.appId || item.notePath !== record.notePath
+			item.appId !== normalizedRecord.appId
+			|| normalizeWechatNotePath(item.notePath) !== normalizedRecord.notePath
 		)
 	]
 		.sort(compareWechatRecordUpdatedAt)
@@ -304,29 +336,37 @@ export async function createWechatDraftFromPackage(
 		normalizedHtml,
 		thumbMediaId
 	);
-	const existingDraft = normalizedSettings.draftRecords.find((record) =>
-		record.appId === normalizedSettings.appId && record.notePath === publishPackage.note.path
+	const notePath = normalizeWechatNotePath(publishPackage.note.path);
+	const existingDraft = findWechatDraftRecord(
+		normalizedSettings.draftRecords,
+		normalizedSettings.appId,
+		notePath
 	);
 	let action: "created" | "updated" = "created";
 	let mediaId = "";
-	if (existingDraft) {
-		try {
-			await client.updateDraft(existingDraft.mediaId, article);
-			mediaId = existingDraft.mediaId;
-			action = "updated";
-		} catch (error) {
-			if (!isInvalidWechatMediaIdError(error)) {
-				throw error;
+	if (existingDraft?.mediaId) {
+		const stillExists = await client.isDraftMediaValid(existingDraft.mediaId);
+		if (stillExists) {
+			try {
+				await client.updateDraft(existingDraft.mediaId, article);
+				mediaId = existingDraft.mediaId;
+				action = "updated";
+			} catch (error) {
+				// Only recreate when the stored media_id is gone; other errors must surface.
+				if (!isInvalidWechatMediaIdError(error)) {
+					throw error;
+				}
 			}
 		}
 	}
 	if (!mediaId) {
 		const draftResponse = await client.createDraft(article);
 		mediaId = getRequiredString(draftResponse, "media_id", "微信草稿接口未返回 media_id");
+		action = "created";
 	}
 	const draftRecord: WechatDraftRecord = {
 		appId: normalizedSettings.appId,
-		notePath: publishPackage.note.path,
+		notePath,
 		mediaId,
 		title: article.title,
 		updatedAt: new Date().toISOString()
@@ -731,6 +771,25 @@ export class WechatOfficialClient {
 		throw createWechatApiError("创建微信公众号草稿", data);
 	}
 
+	async isDraftMediaValid(mediaId: string): Promise<boolean> {
+		const token = await this.getAccessToken();
+		const response = await this.sendRequest("校验微信草稿 media_id", {
+			url: `${WECHAT_API_BASE_URL}/draft/get?access_token=${encodeURIComponent(token)}`,
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json; charset=utf-8"
+			},
+			body: JSON.stringify({ media_id: mediaId }),
+			throw: false
+		});
+		const data = readWechatResponseJson(response);
+		if (isInvalidWechatMediaResponse(data)) {
+			return false;
+		}
+		// Valid drafts return news_item; treat parseable content without invalid-media codes as valid.
+		return Array.isArray(data.news_item) || Number(data.errcode) === 0 || !("errcode" in data);
+	}
+
 	async updateDraft(mediaId: string, article: WechatDraftArticle): Promise<void> {
 		const token = await this.getAccessToken();
 		const response = await this.sendRequest("更新微信公众号草稿", {
@@ -746,8 +805,8 @@ export class WechatOfficialClient {
 			}),
 			throw: false
 		});
-		const data = responseJsonRecord(response);
-		if (Number(data.errcode) === 0 || data.errmsg === "ok") {
+		const data = readWechatResponseJson(response);
+		if (isWechatApiSuccess(data)) {
 			return;
 		}
 		throw createWechatApiError("更新微信公众号草稿", data);
@@ -968,9 +1027,58 @@ function createWechatApiError(label: string, data: Record<string, unknown>): Wec
 }
 
 function isInvalidWechatMediaIdError(error: unknown): boolean {
-	return error instanceof WechatApiError
-		? Number(error.code) === 40007
-		: error instanceof Error && /(?:40007|invalid media_id)/i.test(error.message);
+	if (error instanceof WechatApiError) {
+		return isInvalidWechatMediaCode(error.code);
+	}
+	return error instanceof Error && /(?:40007|40122|invalid media[_ ]?id)/i.test(error.message);
+}
+
+function isInvalidWechatMediaCode(code: number | string | null | undefined): boolean {
+	const normalized = Number(code);
+	// 40007 invalid media_id; 40122 seen when draft media was deleted or expired.
+	return normalized === 40007 || normalized === 40122;
+}
+
+function isInvalidWechatMediaResponse(data: Record<string, unknown>): boolean {
+	return isInvalidWechatMediaCode(
+		data.errcode === undefined || data.errcode === null
+			? null
+			: typeof data.errcode === "number" || typeof data.errcode === "string"
+				? data.errcode
+				: String(data.errcode)
+	);
+}
+
+function isWechatApiSuccess(data: Record<string, unknown>): boolean {
+	if (Number(data.errcode) === 0) {
+		return true;
+	}
+	if (data.errmsg === "ok") {
+		return true;
+	}
+	// Empty body on HTTP 200 — rare, but treat as success only when no error fields exist.
+	return Object.keys(data).length === 0;
+}
+
+/**
+ * Obsidian requestUrl sometimes exposes body via `text` when `json` is empty/throws.
+ * Prefer json, fall back to parsing text so draft/update success is not misread as failure.
+ */
+function readWechatResponseJson(response: OfficialRequestResponse): Record<string, unknown> {
+	const fromJson = responseJsonRecord(response);
+	if (Object.keys(fromJson).length > 0) {
+		return fromJson;
+	}
+	const text = String(response.text || "").trim();
+	if (!text) {
+		return {};
+	}
+	try {
+		const parsed = JSON.parse(text) as unknown;
+		return isRecord(parsed) ? parsed : {};
+	} catch {
+		return {};
+	}
 }
 
 function normalizeWechatDraftRecords(value: unknown): WechatDraftRecord[] {
@@ -984,7 +1092,7 @@ function normalizeWechatDraftRecords(value: unknown): WechatDraftRecord[] {
 			}
 			const record = {
 				appId: normalizeOptionalString(item.appId),
-				notePath: normalizeOptionalString(item.notePath),
+				notePath: normalizeWechatNotePath(normalizeOptionalString(item.notePath)),
 				mediaId: normalizeOptionalString(item.mediaId),
 				title: normalizeOptionalString(item.title),
 				updatedAt: normalizeWechatRecordDate(item.updatedAt)
