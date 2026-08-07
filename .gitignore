@@ -1,3 +1,29 @@
+# Dependencies
 node_modules/
+
+# Build / debug artifacts
 *.map
-docs/
+*.log
+npm-debug.log*
+yarn-error.log*
+coverage/
+.vitest/
+
+# Secrets and local plugin data
+# data.json is where Obsidian stores AppSecret / bridge token if copied from a vault.
+.env
+.env.*
+!.env.example
+data.json
+
+# OS / editor / local agent
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+
+# Internal design notes (kept locally, not for public release)
+docs/*-plan.md
+docs/*-research.md
+docs/chrome-companion-draft-import-plan.md

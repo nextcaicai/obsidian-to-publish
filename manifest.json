@@ -3,8 +3,8 @@
 	"name": "Obsidian to Publish",
 	"version": "0.1.6",
 	"minAppVersion": "1.5.0",
-	"description": "Preview the active note in the right sidebar and copy rich HTML with embedded images for publishing platforms.",
-	"author": "",
-	"authorUrl": "",
+	"description": "Preview notes, copy platform-ready rich HTML/Markdown, and optionally create WeChat drafts, sync Feishu Docs, or import via a local Chrome companion.",
+	"author": "Next蔡蔡",
+	"authorUrl": "https://github.com/nextcaicai",
 	"isDesktopOnly": false
 }

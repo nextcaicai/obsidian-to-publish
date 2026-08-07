@@ -1,7 +1,7 @@
 {
 	"name": "obsidian-to-publish",
 	"version": "0.1.6",
-	"description": "Preview the active Obsidian note in the right sidebar and copy rich HTML for publishing platforms.",
+	"description": "Preview notes, copy platform-ready rich HTML/Markdown, and optionally publish via WeChat, Feishu, or Chrome companion.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
@@ -14,10 +14,20 @@
 		"obsidian-plugin",
 		"wechat",
 		"zhishixingqiu",
-		"markdown"
+		"markdown",
+		"feishu",
+		"publishing"
 	],
-	"author": "",
-	"license": "MIT",
+	"author": "Next蔡蔡",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/nextcaicai/obsidian-to-publish.git"
+	},
+	"bugs": {
+		"url": "https://github.com/nextcaicai/obsidian-to-publish/issues"
+	},
+	"homepage": "https://github.com/nextcaicai/obsidian-to-publish#readme",
 	"devDependencies": {
 		"@types/node": "^22.15.30",
 		"builtin-modules": "^5.0.0",
