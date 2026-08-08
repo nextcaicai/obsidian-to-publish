@@ -13,7 +13,10 @@ async function initCompanionPanel() {
 		return;
 	}
 
-	const response = await chrome.runtime.sendMessage({ type: "task.getLatest" });
+	const response = await chrome.runtime.sendMessage({
+		type: "task.getLatest",
+		platform: adapter.id
+	});
 	const task = response?.task;
 	if (!task || task.platform !== adapter.id) {
 		return;
@@ -75,7 +78,10 @@ function renderPanel(task, adapter) {
 
 	const closeButton = createButton("关闭");
 	closeButton.addEventListener("click", async () => {
-		await chrome.runtime.sendMessage({ type: "task.clearLatest" });
+		await chrome.runtime.sendMessage({
+			type: "task.clearLatest",
+			platform: adapter.id
+		});
 		panel.remove();
 	});
 	controls.appendChild(closeButton);

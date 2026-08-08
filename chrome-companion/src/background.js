@@ -2,7 +2,8 @@ const DEFAULT_BRIDGE_PORT = 27127;
 const STORAGE_KEYS = {
 	port: "bridgePort",
 	token: "bridgeToken",
-	latestTask: "latestTask"
+	latestTask: "latestTask",
+	tasksByPlatform: "tasksByPlatform"
 };
 
 const SUPPORTED_PLATFORMS = [
@@ -68,12 +69,49 @@ async function handleRuntimeMessage(message) {
 	}
 
 	if (message.type === "task.getLatest") {
-		const { latestTask } = await chrome.storage.local.get(STORAGE_KEYS.latestTask);
-		return { ok: true, task: latestTask || null };
+		const platform = typeof message.platform === "string" ? message.platform.trim() : "";
+		const stored = await chrome.storage.local.get({
+			[STORAGE_KEYS.latestTask]: null,
+			[STORAGE_KEYS.tasksByPlatform]: {}
+		});
+		const tasksByPlatform = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
+			? stored[STORAGE_KEYS.tasksByPlatform]
+			: {};
+		if (platform && tasksByPlatform[platform]) {
+			return { ok: true, task: tasksByPlatform[platform] };
+		}
+
+		const latestTask = stored[STORAGE_KEYS.latestTask] || null;
+		if (platform && latestTask && latestTask.platform !== platform) {
+			return { ok: true, task: null };
+		}
+
+		return { ok: true, task: latestTask };
 	}
 
 	if (message.type === "task.clearLatest") {
-		await chrome.storage.local.remove(STORAGE_KEYS.latestTask);
+		const platform = typeof message.platform === "string" ? message.platform.trim() : "";
+		if (!platform) {
+			await chrome.storage.local.remove([STORAGE_KEYS.latestTask, STORAGE_KEYS.tasksByPlatform]);
+			return { ok: true };
+		}
+
+		const stored = await chrome.storage.local.get({
+			[STORAGE_KEYS.latestTask]: null,
+			[STORAGE_KEYS.tasksByPlatform]: {}
+		});
+		const tasksByPlatform = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
+			? { ...stored[STORAGE_KEYS.tasksByPlatform] }
+			: {};
+		delete tasksByPlatform[platform];
+
+		const patch = {
+			[STORAGE_KEYS.tasksByPlatform]: tasksByPlatform
+		};
+		if (stored[STORAGE_KEYS.latestTask]?.platform === platform) {
+			patch[STORAGE_KEYS.latestTask] = null;
+		}
+		await chrome.storage.local.set(patch);
 		return { ok: true };
 	}
 
@@ -259,7 +297,17 @@ async function importDraft(params) {
 		createdAt: new Date().toISOString(),
 		package: publishPackage
 	};
-	await chrome.storage.local.set({ [STORAGE_KEYS.latestTask]: task });
+	const stored = await chrome.storage.local.get({
+		[STORAGE_KEYS.tasksByPlatform]: {}
+	});
+	const tasksByPlatform = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
+		? { ...stored[STORAGE_KEYS.tasksByPlatform] }
+		: {};
+	tasksByPlatform[platform.id] = task;
+	await chrome.storage.local.set({
+		[STORAGE_KEYS.latestTask]: task,
+		[STORAGE_KEYS.tasksByPlatform]: tasksByPlatform
+	});
 	const tab = await chrome.tabs.create({ url: platform.editorUrl, active: true });
 	if (typeof tab.windowId === "number") {
 		await chrome.windows.update(tab.windowId, {
@@ -283,6 +331,10 @@ function resolveTargetPlatform(publishPackage) {
 	}
 
 	return platform;
+}
+
+function isPlainObject(value) {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function sendBridgeResponse(id, result) {
