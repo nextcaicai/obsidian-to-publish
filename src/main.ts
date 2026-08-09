@@ -2255,7 +2255,7 @@ function getChromeCompanionStatusView(status: ReturnType<WeChatPreviewCopyPlugin
 } {
 	if (!status.running) {
 		return {
-			label: "未启动",
+			label: "未连接",
 			tone: "offline",
 			detail: ` 本地 bridge 未启动，端口 ${status.port}。`
 		};

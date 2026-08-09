@@ -34,6 +34,7 @@ let reconnectTimer = null;
 let importDraftQueue = Promise.resolve();
 let connectionState = {
 	connected: false,
+	connecting: false,
 	lastError: "",
 	lastConnectedAt: 0
 };
@@ -124,25 +125,37 @@ async function connectBridge() {
 	});
 
 	if (!bridgeToken) {
+		closeBridge();
 		connectionState = {
 			connected: false,
+			connecting: false,
 			lastError: "missing_token",
 			lastConnectedAt: 0
 		};
 		return;
 	}
 
-	if (bridgeSocket && bridgeSocket.readyState === WebSocket.OPEN) {
+	if (bridgeSocket && (
+		bridgeSocket.readyState === WebSocket.OPEN
+		|| bridgeSocket.readyState === WebSocket.CONNECTING
+	)) {
 		return;
 	}
 
 	closeBridge();
 	const url = `ws://127.0.0.1:${bridgePort}/bridge?token=${encodeURIComponent(bridgeToken)}`;
+	connectionState = {
+		connected: false,
+		connecting: true,
+		lastError: "",
+		lastConnectedAt: connectionState.lastConnectedAt
+	};
 	try {
 		bridgeSocket = new WebSocket(url);
 	} catch (error) {
 		connectionState = {
 			connected: false,
+			connecting: false,
 			lastError: String(error),
 			lastConnectedAt: 0
 		};
@@ -150,9 +163,14 @@ async function connectBridge() {
 		return;
 	}
 
-	bridgeSocket.addEventListener("open", () => {
+	const socket = bridgeSocket;
+	socket.addEventListener("open", () => {
+		if (!isCurrentBridgeSocket(socket)) {
+			return;
+		}
 		connectionState = {
 			connected: true,
+			connecting: false,
 			lastError: "",
 			lastConnectedAt: Date.now()
 		};
@@ -167,23 +185,35 @@ async function connectBridge() {
 		startHeartbeat();
 	});
 
-	bridgeSocket.addEventListener("message", (event) => {
+	socket.addEventListener("message", (event) => {
+		if (!isCurrentBridgeSocket(socket)) {
+			return;
+		}
 		void handleBridgeMessage(event.data);
 	});
 
-	bridgeSocket.addEventListener("close", () => {
+	socket.addEventListener("close", () => {
+		if (!isCurrentBridgeSocket(socket)) {
+			return;
+		}
 		stopHeartbeat();
+		bridgeSocket = null;
 		connectionState = {
 			connected: false,
-			lastError: "closed",
+			connecting: false,
+			lastError: connectionState.lastError || "closed",
 			lastConnectedAt: connectionState.lastConnectedAt
 		};
 		scheduleReconnect();
 	});
 
-	bridgeSocket.addEventListener("error", () => {
+	socket.addEventListener("error", () => {
+		if (!isCurrentBridgeSocket(socket)) {
+			return;
+		}
 		connectionState = {
 			connected: false,
+			connecting: false,
 			lastError: "websocket_error",
 			lastConnectedAt: connectionState.lastConnectedAt
 		};
@@ -198,13 +228,18 @@ function closeBridge() {
 	}
 
 	if (bridgeSocket) {
+		const socket = bridgeSocket;
+		bridgeSocket = null;
 		try {
-			bridgeSocket.close();
+			socket.close();
 		} catch {
 			// The next connect attempt owns recovery.
 		}
-		bridgeSocket = null;
 	}
+}
+
+function isCurrentBridgeSocket(socket) {
+	return bridgeSocket === socket;
 }
 
 function startHeartbeat() {
@@ -551,4 +586,13 @@ function sendBridgeMessage(payload) {
 	}
 
 	bridgeSocket.send(JSON.stringify(payload));
+}
+
+if (globalThis.__OTP_COMPANION_BACKGROUND_TEST__ === true) {
+	globalThis.OTPCompanionBackground = {
+		closeBridge,
+		connectBridge,
+		getConnectionState: () => ({ ...connectionState }),
+		reconnectBridge
+	};
 }

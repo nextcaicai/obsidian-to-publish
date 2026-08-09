@@ -141,8 +141,8 @@
 }
 
 .obsidian-to-publish-bridge-status-offline {
-	background: var(--background-modifier-error);
-	color: var(--text-error);
+	background: rgba(var(--color-red-rgb), 0.14);
+	color: var(--color-red);
 }
 
 .obsidian-to-publish-content {
