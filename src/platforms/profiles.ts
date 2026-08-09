@@ -437,6 +437,8 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 		copyLabel: "CSDN",
 		editorUrl: "https://editor.csdn.net/md/",
 		preferredFormat: "markdown",
+		// Temporarily hidden: CSDN draft import is still unstable.
+		visibleInUi: false,
 		capabilities: MARKDOWN_CAPABILITIES,
 		wrapperStyle: DEFAULT_WRAPPER_STYLE,
 		rules: LONG_FORM_RULES,
@@ -512,8 +514,17 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 
 export const PLATFORM_PROFILE_LIST: PlatformProfile[] = Object.values(PLATFORM_PROFILES);
 
+/** Platforms shown in picker/settings UI. Hidden platforms remain available to adapters. */
+export const PLATFORM_PICKER_LIST: PlatformProfile[] = PLATFORM_PROFILE_LIST.filter(
+	(profile) => profile.visibleInUi !== false
+);
+
 export function isCopyPlatform(value: string): value is CopyPlatform {
 	return Object.prototype.hasOwnProperty.call(PLATFORM_PROFILES, value);
+}
+
+export function isPlatformVisibleInUi(platform: CopyPlatform): boolean {
+	return PLATFORM_PROFILES[platform]?.visibleInUi !== false;
 }
 
 export function applyPlatformProfile(root: HTMLElement, platform: CopyPlatform) {

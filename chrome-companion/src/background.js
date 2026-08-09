@@ -3,8 +3,12 @@ const STORAGE_KEYS = {
 	port: "bridgePort",
 	token: "bridgeToken",
 	latestTask: "latestTask",
+	// Legacy aggregate map. Kept for migration/read fallback only.
 	tasksByPlatform: "tasksByPlatform"
 };
+const TASK_KEY_PREFIX = "task:";
+const TASK_DELIVER_RETRY_LIMIT = 40;
+const TASK_DELIVER_RETRY_MS = 500;
 
 const SUPPORTED_PLATFORMS = [
 	{ id: "x", label: "X Articles", editorUrl: "https://x.com/compose/articles" },
@@ -17,9 +21,17 @@ const SUPPORTED_PLATFORMS = [
 	{ id: "zhishixingqiu", label: "知识星球", editorUrl: "https://wx.zsxq.com" }
 ];
 
+/** @type {Map<number, object>} */
+const tasksByTabId = new Map();
+/** @type {Map<string, object>} */
+const tasksByPlatformMemory = new Map();
+/** @type {Map<number, number>} */
+const deliverTimersByTabId = new Map();
+
 let bridgeSocket = null;
 let heartbeatTimer = null;
 let reconnectTimer = null;
+let importDraftQueue = Promise.resolve();
 let connectionState = {
 	connected: false,
 	lastError: "",
@@ -49,12 +61,27 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 	}
 });
 
+chrome.tabs.onRemoved.addListener((tabId) => {
+	tasksByTabId.delete(tabId);
+	clearDeliverTimer(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+	if (changeInfo.status !== "complete" && !changeInfo.url) {
+		return;
+	}
+	if (!tasksByTabId.has(tabId)) {
+		return;
+	}
+	void deliverTaskToTab(tabId);
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	void handleRuntimeMessage(message, sender).then(sendResponse);
 	return true;
 });
 
-async function handleRuntimeMessage(message) {
+async function handleRuntimeMessage(message, sender) {
 	if (!message || typeof message !== "object") {
 		return { ok: false, error: "invalid_message" };
 	}
@@ -70,48 +97,15 @@ async function handleRuntimeMessage(message) {
 
 	if (message.type === "task.getLatest") {
 		const platform = typeof message.platform === "string" ? message.platform.trim() : "";
-		const stored = await chrome.storage.local.get({
-			[STORAGE_KEYS.latestTask]: null,
-			[STORAGE_KEYS.tasksByPlatform]: {}
-		});
-		const tasksByPlatform = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
-			? stored[STORAGE_KEYS.tasksByPlatform]
-			: {};
-		if (platform && tasksByPlatform[platform]) {
-			return { ok: true, task: tasksByPlatform[platform] };
-		}
-
-		const latestTask = stored[STORAGE_KEYS.latestTask] || null;
-		if (platform && latestTask && latestTask.platform !== platform) {
-			return { ok: true, task: null };
-		}
-
-		return { ok: true, task: latestTask };
+		const tabId = typeof sender?.tab?.id === "number" ? sender.tab.id : null;
+		const task = await resolveTaskForRequest(platform, tabId);
+		return { ok: true, task };
 	}
 
 	if (message.type === "task.clearLatest") {
 		const platform = typeof message.platform === "string" ? message.platform.trim() : "";
-		if (!platform) {
-			await chrome.storage.local.remove([STORAGE_KEYS.latestTask, STORAGE_KEYS.tasksByPlatform]);
-			return { ok: true };
-		}
-
-		const stored = await chrome.storage.local.get({
-			[STORAGE_KEYS.latestTask]: null,
-			[STORAGE_KEYS.tasksByPlatform]: {}
-		});
-		const tasksByPlatform = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
-			? { ...stored[STORAGE_KEYS.tasksByPlatform] }
-			: {};
-		delete tasksByPlatform[platform];
-
-		const patch = {
-			[STORAGE_KEYS.tasksByPlatform]: tasksByPlatform
-		};
-		if (stored[STORAGE_KEYS.latestTask]?.platform === platform) {
-			patch[STORAGE_KEYS.latestTask] = null;
-		}
-		await chrome.storage.local.set(patch);
+		const tabId = typeof sender?.tab?.id === "number" ? sender.tab.id : null;
+		await clearTask({ platform, tabId });
 		return { ok: true };
 	}
 
@@ -273,7 +267,7 @@ async function handleBridgeMessage(rawMessage) {
 		}
 
 		if (message.method === "article.importDraft") {
-			const result = await importDraft(message.params);
+			const result = await enqueueImportDraft(message.params);
 			sendBridgeResponse(message.id, result);
 			return;
 		}
@@ -282,6 +276,13 @@ async function handleBridgeMessage(rawMessage) {
 	} catch (error) {
 		sendBridgeError(message.id, error instanceof Error ? error.message : String(error));
 	}
+}
+
+function enqueueImportDraft(params) {
+	const run = importDraftQueue.then(() => importDraft(params));
+	// Keep the queue alive even when one import fails.
+	importDraftQueue = run.then(() => undefined, () => undefined);
+	return run;
 }
 
 async function importDraft(params) {
@@ -297,18 +298,19 @@ async function importDraft(params) {
 		createdAt: new Date().toISOString(),
 		package: publishPackage
 	};
-	const stored = await chrome.storage.local.get({
-		[STORAGE_KEYS.tasksByPlatform]: {}
+
+	tasksByPlatformMemory.set(platform.id, task);
+	await persistPlatformTask(platform.id, task);
+
+	const tab = await chrome.tabs.create({
+		url: platform.editorUrl,
+		// Keep previously opened multi-select tabs alive without stealing focus each time.
+		active: true
 	});
-	const tasksByPlatform = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
-		? { ...stored[STORAGE_KEYS.tasksByPlatform] }
-		: {};
-	tasksByPlatform[platform.id] = task;
-	await chrome.storage.local.set({
-		[STORAGE_KEYS.latestTask]: task,
-		[STORAGE_KEYS.tasksByPlatform]: tasksByPlatform
-	});
-	const tab = await chrome.tabs.create({ url: platform.editorUrl, active: true });
+	if (typeof tab.id === "number") {
+		tasksByTabId.set(tab.id, task);
+		void deliverTaskToTab(tab.id);
+	}
 	if (typeof tab.windowId === "number") {
 		await chrome.windows.update(tab.windowId, {
 			focused: true
@@ -319,8 +321,200 @@ async function importDraft(params) {
 		accepted: true,
 		taskId: task.id,
 		platform: platform.id,
-		editorUrl: platform.editorUrl
+		editorUrl: platform.editorUrl,
+		tabId: typeof tab.id === "number" ? tab.id : null
 	};
+}
+
+async function persistPlatformTask(platformId, task) {
+	const platformKey = getPlatformTaskKey(platformId);
+	try {
+		await chrome.storage.local.set({
+			[platformKey]: task,
+			[STORAGE_KEYS.latestTask]: task
+		});
+		return;
+	} catch (error) {
+		console.warn("Failed to persist full platform task package, retrying without large assets.", error);
+	}
+
+	// Fallback: store a package without base64 assets so multi-platform text injection still works.
+	const lightweightTask = createLightweightTask(task);
+	await chrome.storage.local.set({
+		[platformKey]: lightweightTask,
+		[STORAGE_KEYS.latestTask]: lightweightTask
+	});
+	// Keep the full package only in memory for this service-worker lifetime.
+	tasksByPlatformMemory.set(platformId, task);
+}
+
+function createLightweightTask(task) {
+	const publishPackage = task?.package;
+	if (!publishPackage || typeof publishPackage !== "object") {
+		return task;
+	}
+
+	return {
+		...task,
+		package: {
+			...publishPackage,
+			assets: [],
+			article: {
+				...(publishPackage.article || {}),
+				// Keep markdown/html/text for body fill; drop heavy binary assets.
+			},
+			warnings: [
+				...(Array.isArray(publishPackage.warnings) ? publishPackage.warnings : []),
+				{
+					code: "assets_stripped_for_storage",
+					message: "图片资源过大，未写入本地缓存；当前标签页仍可使用内存中的完整任务。"
+				}
+			]
+		}
+	};
+}
+
+async function resolveTaskForRequest(platform, tabId) {
+	if (typeof tabId === "number" && tasksByTabId.has(tabId)) {
+		const tabTask = tasksByTabId.get(tabId);
+		if (!platform || tabTask.platform === platform) {
+			return tabTask;
+		}
+	}
+
+	if (platform && tasksByPlatformMemory.has(platform)) {
+		return tasksByPlatformMemory.get(platform);
+	}
+
+	if (platform) {
+		const storedPlatformTask = await readPlatformTask(platform);
+		if (storedPlatformTask) {
+			tasksByPlatformMemory.set(platform, storedPlatformTask);
+			return storedPlatformTask;
+		}
+	}
+
+	const { latestTask } = await chrome.storage.local.get({
+		[STORAGE_KEYS.latestTask]: null
+	});
+	if (latestTask && (!platform || latestTask.platform === platform)) {
+		return latestTask;
+	}
+
+	return null;
+}
+
+async function readPlatformTask(platform) {
+	const platformKey = getPlatformTaskKey(platform);
+	const stored = await chrome.storage.local.get({
+		[platformKey]: null,
+		[STORAGE_KEYS.tasksByPlatform]: {}
+	});
+
+	if (stored[platformKey]) {
+		return stored[platformKey];
+	}
+
+	// Legacy fallback for older companion builds.
+	const tasksByPlatform = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
+		? stored[STORAGE_KEYS.tasksByPlatform]
+		: {};
+	return tasksByPlatform[platform] || null;
+}
+
+async function clearTask({ platform = "", tabId = null } = {}) {
+	if (typeof tabId === "number") {
+		const tabTask = tasksByTabId.get(tabId);
+		tasksByTabId.delete(tabId);
+		clearDeliverTimer(tabId);
+		if (!platform && tabTask?.platform) {
+			platform = tabTask.platform;
+		}
+	}
+
+	if (!platform) {
+		tasksByTabId.clear();
+		tasksByPlatformMemory.clear();
+		for (const timerTabId of deliverTimersByTabId.keys()) {
+			clearDeliverTimer(timerTabId);
+		}
+		const keysToRemove = [STORAGE_KEYS.latestTask, STORAGE_KEYS.tasksByPlatform];
+		for (const item of SUPPORTED_PLATFORMS) {
+			keysToRemove.push(getPlatformTaskKey(item.id));
+		}
+		await chrome.storage.local.remove(keysToRemove);
+		return;
+	}
+
+	tasksByPlatformMemory.delete(platform);
+	for (const [mappedTabId, task] of tasksByTabId.entries()) {
+		if (task.platform === platform) {
+			tasksByTabId.delete(mappedTabId);
+			clearDeliverTimer(mappedTabId);
+		}
+	}
+
+	const platformKey = getPlatformTaskKey(platform);
+	const stored = await chrome.storage.local.get({
+		[STORAGE_KEYS.latestTask]: null,
+		[STORAGE_KEYS.tasksByPlatform]: {}
+	});
+	const patchRemove = [platformKey];
+	const tasksByPlatform = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
+		? { ...stored[STORAGE_KEYS.tasksByPlatform] }
+		: {};
+	if (platform in tasksByPlatform) {
+		delete tasksByPlatform[platform];
+	}
+
+	const updates = {
+		[STORAGE_KEYS.tasksByPlatform]: tasksByPlatform
+	};
+	if (stored[STORAGE_KEYS.latestTask]?.platform === platform) {
+		updates[STORAGE_KEYS.latestTask] = null;
+	}
+	await chrome.storage.local.set(updates);
+	await chrome.storage.local.remove(patchRemove);
+}
+
+async function deliverTaskToTab(tabId) {
+	const task = tasksByTabId.get(tabId);
+	if (!task) {
+		return false;
+	}
+
+	clearDeliverTimer(tabId);
+
+	for (let attempt = 0; attempt < TASK_DELIVER_RETRY_LIMIT; attempt += 1) {
+		if (!tasksByTabId.has(tabId)) {
+			return false;
+		}
+
+		try {
+			await chrome.tabs.sendMessage(tabId, {
+				type: "task.deliver",
+				task
+			});
+			return true;
+		} catch {
+			// Content script may not be ready yet, especially on SPA editor boot.
+			await delay(TASK_DELIVER_RETRY_MS);
+		}
+	}
+
+	return false;
+}
+
+function clearDeliverTimer(tabId) {
+	const timer = deliverTimersByTabId.get(tabId);
+	if (timer) {
+		clearTimeout(timer);
+		deliverTimersByTabId.delete(tabId);
+	}
+}
+
+function getPlatformTaskKey(platformId) {
+	return `${TASK_KEY_PREFIX}${platformId}`;
 }
 
 function resolveTargetPlatform(publishPackage) {
@@ -335,6 +529,12 @@ function resolveTargetPlatform(publishPackage) {
 
 function isPlainObject(value) {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function delay(ms) {
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
 }
 
 function sendBridgeResponse(id, result) {

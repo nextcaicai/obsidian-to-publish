@@ -17,14 +17,19 @@ describe("platform selection", () => {
 		]);
 	});
 
+	it("drops temporarily hidden platforms like CSDN from selection", () => {
+		expect(normalizeSelectedPlatforms(["csdn", "juejin"], "csdn")).toEqual(["juejin"]);
+		expect(normalizeSelectedPlatforms(["csdn"], "csdn")).toEqual(["wechat"]);
+	});
+
 	it("keeps the primary platform inside the selected list", () => {
-		expect(ensurePrimaryInSelectedPlatforms(["csdn", "juejin"], "wechat")).toEqual([
+		expect(ensurePrimaryInSelectedPlatforms(["xiaohongshu", "juejin"], "wechat")).toEqual([
 			"wechat",
-			"csdn",
+			"xiaohongshu",
 			"juejin"
 		]);
-		expect(ensurePrimaryInSelectedPlatforms(["csdn", "juejin"], "juejin")).toEqual([
-			"csdn",
+		expect(ensurePrimaryInSelectedPlatforms(["xiaohongshu", "juejin"], "juejin")).toEqual([
+			"xiaohongshu",
 			"juejin"
 		]);
 	});

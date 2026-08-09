@@ -1,5 +1,9 @@
 import type { CopyPlatform } from "./types";
-import { isCopyPlatform, PLATFORM_PROFILES } from "./profiles";
+import {
+	isCopyPlatform,
+	isPlatformVisibleInUi,
+	PLATFORM_PROFILES
+} from "./profiles";
 
 export function normalizeSelectedPlatforms(
 	value: unknown,
@@ -8,9 +12,16 @@ export function normalizeSelectedPlatforms(
 	const rawList = Array.isArray(value) ? value : [];
 	const selected: CopyPlatform[] = [];
 	const seen = new Set<CopyPlatform>();
+	const visibleFallback = isPlatformVisibleInUi(fallbackPlatform)
+		? fallbackPlatform
+		: "wechat";
 
 	for (const item of rawList) {
 		if (typeof item !== "string" || !isCopyPlatform(item) || seen.has(item)) {
+			continue;
+		}
+		// Drop temporarily hidden platforms from multi-select state.
+		if (!isPlatformVisibleInUi(item)) {
 			continue;
 		}
 		seen.add(item);
@@ -18,7 +29,7 @@ export function normalizeSelectedPlatforms(
 	}
 
 	if (selected.length === 0) {
-		return [fallbackPlatform];
+		return [visibleFallback];
 	}
 
 	return selected;

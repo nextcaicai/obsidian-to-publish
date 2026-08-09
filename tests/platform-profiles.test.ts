@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildZhishixingqiuTableRows,
 	isCopyPlatform,
+	PLATFORM_PICKER_LIST,
 	PLATFORM_PROFILE_LIST,
 	PLATFORM_PROFILES
 } from "../src/platforms/profiles";
@@ -15,6 +16,22 @@ describe("platform profiles", () => {
 			"zhishixingqiu",
 			"zhihu",
 			"csdn",
+			"juejin",
+			"substack",
+			"x",
+			"xiaohongshu",
+			"bilibili"
+		]);
+	});
+
+	it("hides unstable platforms from the picker UI without removing adapters", () => {
+		expect(PLATFORM_PROFILES.csdn.visibleInUi).toBe(false);
+		expect(PLATFORM_PICKER_LIST.map((profile) => profile.id)).not.toContain("csdn");
+		expect(PLATFORM_PICKER_LIST.map((profile) => profile.id)).toEqual([
+			"wechat",
+			"feishu",
+			"zhishixingqiu",
+			"zhihu",
 			"juejin",
 			"substack",
 			"x",

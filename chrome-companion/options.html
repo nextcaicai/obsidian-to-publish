@@ -13,9 +13,23 @@
 				padding: 24px;
 			}
 
+			.brand {
+				align-items: center;
+				display: flex;
+				gap: 12px;
+				margin: 0 0 16px;
+			}
+
+			.brand img {
+				border-radius: 10px;
+				display: block;
+				height: 40px;
+				width: 40px;
+			}
+
 			h1 {
 				font-size: 20px;
-				margin: 0 0 16px;
+				margin: 0;
 			}
 
 			label {
@@ -95,7 +109,10 @@
 		</style>
 	</head>
 	<body>
-		<h1>Obsidian to Publish Companion</h1>
+		<div class="brand">
+			<img src="icons/icon-48.png" alt="Obsidian to Publish Companion" width="40" height="40">
+			<h1>Obsidian to Publish Companion</h1>
+		</div>
 
 		<label for="port">本地端口</label>
 		<input id="port" inputmode="numeric" placeholder="27127">

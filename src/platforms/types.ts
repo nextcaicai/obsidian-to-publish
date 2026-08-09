@@ -30,6 +30,11 @@ export interface PlatformProfile {
 	editorUrl: string;
 	preferredFormat: PlatformOutputFormat;
 	capabilities: PlatformCapability;
+	/**
+	 * When false, hide from picker/settings UI while keeping the adapter for code paths.
+	 * Defaults to visible when omitted.
+	 */
+	visibleInUi?: boolean;
 	wrapperStyle: string;
 	rules: PlatformStyleRule[];
 	transform?: (root: HTMLElement) => void;

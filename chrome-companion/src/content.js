@@ -1,15 +1,31 @@
+const handledTaskIds = new Set();
+
 void initCompanionPanel();
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+	if (!message || typeof message !== "object") {
+		return false;
+	}
+
+	if (message.type === "task.deliver") {
+		void handleDeliveredTask(message.task)
+			.then((handled) => sendResponse({ ok: true, handled }))
+			.catch((error) => {
+				console.error(error);
+				sendResponse({
+					ok: false,
+					error: error instanceof Error ? error.message : String(error)
+				});
+			});
+		return true;
+	}
+
+	return false;
+});
 
 async function initCompanionPanel() {
 	const companion = globalThis.OTPCompanion;
 	const adapter = companion.getPlatformAdapter();
-	if (!adapter) {
-		return;
-	}
-	if (window.top !== window && adapter.frameScope !== "child") {
-		return;
-	}
-	if (window.top === window && adapter.frameScope === "child") {
+	if (!adapter || !isAdapterFrameAllowed(adapter)) {
 		return;
 	}
 
@@ -22,8 +38,36 @@ async function initCompanionPanel() {
 		return;
 	}
 
+	await handleDeliveredTask(task);
+}
+
+async function handleDeliveredTask(task) {
+	const companion = globalThis.OTPCompanion;
+	const adapter = companion.getPlatformAdapter();
+	if (!adapter || !isAdapterFrameAllowed(adapter)) {
+		return false;
+	}
+	if (!task || task.platform !== adapter.id) {
+		return false;
+	}
+	if (handledTaskIds.has(task.id)) {
+		return true;
+	}
+	handledTaskIds.add(task.id);
+
 	const panel = renderPanel(task, adapter);
 	void autoInsertDraft(task, adapter, panel);
+	return true;
+}
+
+function isAdapterFrameAllowed(adapter) {
+	if (window.top !== window && adapter.frameScope !== "child") {
+		return false;
+	}
+	if (window.top === window && adapter.frameScope === "child") {
+		return false;
+	}
+	return true;
 }
 
 function renderPanel(task, adapter) {

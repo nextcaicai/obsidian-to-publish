@@ -8,12 +8,14 @@
 	align-items: center;
 	border-bottom: 1px solid var(--background-modifier-border);
 	display: flex;
+	font-size: var(--font-ui-small);
 	gap: 8px;
 	padding: 8px;
 }
 
 .obsidian-to-publish-toolbar button {
 	flex: 0 0 auto;
+	font-size: var(--font-ui-small);
 }
 
 .obsidian-to-publish-platform-picker {
@@ -25,6 +27,7 @@
 .obsidian-to-publish-platform-trigger {
 	align-items: center;
 	display: inline-flex;
+	font-size: var(--font-ui-small);
 	gap: 6px;
 	justify-content: space-between;
 	max-width: 200px;
@@ -43,7 +46,7 @@
 .obsidian-to-publish-platform-trigger-caret {
 	color: var(--text-muted);
 	flex: 0 0 auto;
-	font-size: 12px;
+	font-size: 11px;
 	line-height: 1;
 }
 
@@ -59,6 +62,7 @@
 	box-sizing: border-box;
 	display: flex;
 	flex-direction: column;
+	font-size: var(--font-ui-small);
 	gap: 2px;
 	overflow-x: hidden;
 	overflow-y: auto;
@@ -72,8 +76,10 @@
 	color: var(--text-normal);
 	cursor: pointer;
 	display: flex;
+	font-size: var(--font-ui-small);
 	gap: 8px;
-	padding: 6px 8px;
+	line-height: 1.3;
+	padding: 5px 8px;
 	user-select: none;
 }
 
@@ -88,14 +94,29 @@
 .obsidian-to-publish-platform-option input[type="checkbox"] {
 	flex: 0 0 auto;
 	margin: 0;
+	transform: scale(0.92);
+	transform-origin: center;
 }
 
-.obsidian-to-publish-status {
+.obsidian-to-publish-settings-brand {
+	margin-bottom: 18px;
+}
+
+.obsidian-to-publish-settings-brand-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.obsidian-to-publish-settings-title {
+	font-size: var(--font-ui-medium);
+	font-weight: 650;
+}
+
+.obsidian-to-publish-settings-subtitle {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
 .obsidian-to-publish-bridge-status {

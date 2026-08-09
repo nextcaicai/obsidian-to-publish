@@ -26,6 +26,7 @@ import {
 import {
 	applyPlatformProfile,
 	isCopyPlatform,
+	PLATFORM_PICKER_LIST,
 	PLATFORM_PROFILE_LIST,
 	PLATFORM_PROFILES,
 	wrapPlatformFragment
@@ -925,7 +926,6 @@ class WeChatPreviewCopyView extends ItemView {
 	private renderComponent: Component | null = null;
 	private renderSerial = 0;
 	private sourceEl!: HTMLElement;
-	private statusEl!: HTMLElement;
 	private documentClickHandler: ((event: MouseEvent) => void) | null = null;
 	private windowRepositionHandler: (() => void) | null = null;
 
@@ -973,7 +973,6 @@ class WeChatPreviewCopyView extends ItemView {
 			void this.renderActiveFile();
 		});
 
-		this.statusEl = toolbarEl.createDiv({ cls: "obsidian-to-publish-status" });
 		this.previewEl = this.contentEl.createDiv({ cls: "obsidian-to-publish-content" });
 		this.sourceEl = this.contentEl.createDiv({
 			cls: "obsidian-to-publish-source markdown-rendered"
@@ -1047,7 +1046,7 @@ class WeChatPreviewCopyView extends ItemView {
 		menu.setAttribute("aria-multiselectable", "true");
 
 		const selected = new Set(this.plugin.getSelectedPlatforms());
-		for (const profile of PLATFORM_PROFILE_LIST) {
+		for (const profile of PLATFORM_PICKER_LIST) {
 			const option = menu.createEl("label", {
 				cls: "obsidian-to-publish-platform-option"
 			});
@@ -1167,15 +1166,12 @@ class WeChatPreviewCopyView extends ItemView {
 		this.sourceEl.empty();
 
 		if (!file) {
-			this.statusEl.setText("未打开 Markdown 笔记");
 			this.previewEl.createDiv({
 				cls: "obsidian-to-publish-empty",
 				text: "打开一篇 Markdown 笔记后在这里预览。"
 			});
 			return;
 		}
-
-		this.statusEl.setText(file.path);
 
 		const markdown = await this.plugin.getMarkdownForFile(file);
 		if (serial !== this.renderSerial) {
@@ -1271,22 +1267,34 @@ class WeChatPreviewCopyView extends ItemView {
 		}
 
 		if (selectedPlatforms.length === 1) {
-			await this.syncPlatformDraft(selectedPlatforms[0], { notify: true });
+			await this.syncPlatformDraft(selectedPlatforms[0], {
+				notify: true,
+				activateChrome: true
+			});
 			return;
 		}
 
 		new Notice(`正在同步 ${selectedPlatforms.length} 个平台草稿箱...`);
 		const successes: string[] = [];
 		const failures: string[] = [];
+		let shouldActivateChrome = false;
 
 		for (const platform of selectedPlatforms) {
 			const profile = PLATFORM_PROFILES[platform];
-			const success = await this.syncPlatformDraft(platform, { notify: false });
-			if (success) {
+			const result = await this.syncPlatformDraft(platform, {
+				notify: false,
+				activateChrome: false
+			});
+			if (result.success) {
 				successes.push(profile.copyLabel);
+				shouldActivateChrome = shouldActivateChrome || result.usedChromeCompanion;
 			} else {
 				failures.push(profile.copyLabel);
 			}
+		}
+
+		if (shouldActivateChrome) {
+			await activateChromeAfterCompanionDelivery();
 		}
 
 		if (failures.length === 0) {
@@ -1304,29 +1312,42 @@ class WeChatPreviewCopyView extends ItemView {
 
 	private async syncPlatformDraft(
 		platform: CopyPlatform,
-		options: { notify?: boolean } = {}
-	): Promise<boolean> {
+		options: {
+			notify?: boolean;
+			activateChrome?: boolean;
+		} = {}
+	): Promise<{ success: boolean; usedChromeCompanion: boolean }> {
 		const shouldNotify = options.notify !== false;
+		const shouldActivateChrome = options.activateChrome !== false;
 
 		if (this.plugin.shouldUseFeishuDocsAction(platform)) {
-			return this.syncFeishuDraft(shouldNotify);
+			return {
+				success: await this.syncFeishuDraft(shouldNotify),
+				usedChromeCompanion: false
+			};
 		}
 
 		if (this.plugin.shouldUseWechatOfficialDraftAction(platform)) {
-			return this.syncWechatOfficialDraft(shouldNotify);
+			return {
+				success: await this.syncWechatOfficialDraft(shouldNotify),
+				usedChromeCompanion: false
+			};
 		}
 
 		if (this.plugin.shouldUseChromeCompanionForPlatform(platform)) {
 			try {
 				const publishPackage = await this.buildPublishPackage(platform);
-				const sent = await sendToChromeCompanionAndActivate(
-					() => this.plugin.sendPublishPackageToChromeCompanion(publishPackage, {
-						notify: shouldNotify
-					}),
-					activateChromeAfterCompanionDelivery
-				);
+				const send = () => this.plugin.sendPublishPackageToChromeCompanion(publishPackage, {
+					notify: shouldNotify
+				});
+				const sent = shouldActivateChrome
+					? await sendToChromeCompanionAndActivate(send, activateChromeAfterCompanionDelivery)
+					: await send();
 				if (sent) {
-					return true;
+					return {
+						success: true,
+						usedChromeCompanion: true
+					};
 				}
 				if (shouldNotify) {
 					new Notice("发送到 Chrome 插件失败，已改用复制并打开兜底。");
@@ -1339,7 +1360,10 @@ class WeChatPreviewCopyView extends ItemView {
 			}
 		}
 
-		return this.copyAndOpenPlatform(platform, { notify: shouldNotify });
+		return {
+			success: await this.copyAndOpenPlatform(platform, { notify: shouldNotify }),
+			usedChromeCompanion: false
+		};
 	}
 
 	private async syncWechatOfficialDraft(notify: boolean): Promise<boolean> {
@@ -1629,16 +1653,10 @@ class WeChatPreviewCopyView extends ItemView {
 		}, 100);
 	}
 
-	private updateStatus(file: TFile, unresolvedImages: number) {
-		const profile = this.plugin.getCurrentPlatformProfile();
-		const imageWarning = profile.capabilities.requiresRemoteImageUrl && unresolvedImages > 0
-			? ` · ${unresolvedImages} 张本地图片需先上传为线上 URL`
-			: profile.capabilities.requiresManualImageUpload
-			? " · 图片可能需要手动上传"
-			: unresolvedImages === 0
-				? ""
-				: ` · ${unresolvedImages} 张图片未嵌入`;
-		this.statusEl.setText(`${file.path} · 正在预览${profile.copyLabel}的${getClipboardFormatLabel(profile)}${imageWarning}`);
+	private updateStatus(_file: TFile, unresolvedImages: number) {
+		// Path/status text was removed from the toolbar to reduce noise.
+		// Keep image-related warnings available via notices during copy/sync.
+		void unresolvedImages;
 	}
 
 	private resolveEmbeddedImageFiles(): TFile[] {
@@ -1788,6 +1806,17 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
+		const brand = containerEl.createDiv({ cls: "obsidian-to-publish-settings-brand" });
+		const brandText = brand.createDiv({ cls: "obsidian-to-publish-settings-brand-text" });
+		brandText.createEl("div", {
+			cls: "obsidian-to-publish-settings-title",
+			text: "Obsidian to Publish"
+		});
+		brandText.createEl("div", {
+			cls: "obsidian-to-publish-settings-subtitle",
+			text: "预览、复制，并同步到多平台草稿箱"
+		});
+
 		new Setting(containerEl)
 			.setName("自动打开预览")
 			.setDesc("插件加载时自动打开右侧发布预览。")
@@ -1805,12 +1834,18 @@ class WeChatPreviewCopySettingTab extends PluginSettingTab {
 			.setName("默认预览平台")
 			.setDesc("预览与「复制」默认使用的平台。多平台同步请在预览工具栏勾选。")
 			.addDropdown((dropdown) => {
-				for (const profile of PLATFORM_PROFILE_LIST) {
+				for (const profile of PLATFORM_PICKER_LIST) {
 					dropdown.addOption(profile.id, profile.label);
 				}
 
+				const defaultPlatform = PLATFORM_PICKER_LIST.some(
+					(profile) => profile.id === this.plugin.settings.targetPlatform
+				)
+					? this.plugin.settings.targetPlatform
+					: PLATFORM_PICKER_LIST[0]?.id ?? "wechat";
+
 				dropdown
-					.setValue(this.plugin.settings.targetPlatform)
+					.setValue(defaultPlatform)
 					.onChange(async (value) => {
 						if (isCopyPlatform(value)) {
 							await this.plugin.setTargetPlatform(value);
