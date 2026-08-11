@@ -14,7 +14,12 @@ coverage/
 .env
 .env.*
 !.env.example
-data.json
+**/data.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.crx
 
 # OS / editor / local agent
 .DS_Store

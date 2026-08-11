@@ -139,7 +139,7 @@ https://github.com/nextcaicai/obsidian-to-publish
 5. 在 Chrome 打开 `chrome://extensions`。
 6. 打开「开发者模式」。
 7. 点击「加载已解压的扩展程序」，选择本项目里的 `chrome-companion/` 目录。
-8. 打开扩展选项页，填入端口和连接令牌并保存。
+8. 打开扩展选项页，填入端口和连接令牌并保存。Substack 用户可以额外填写自己的后台地址，例如 `https://nextcaicai.substack.com/publish/home`；也可以先打开一次自己的 Substack 后台首页，让扩展自动识别。
 9. 回到 Obsidian，打开要发布的笔记，选择目标平台，运行发送到 Chrome 插件的命令。
 10. Chrome 插件会打开目标平台编辑器并尝试填入内容；如果自动填入失败，可以用扩展面板里的复制按钮回退。
 
@@ -251,7 +251,7 @@ Obsidian to Publish 默认本地处理。预览、复制、本地图片嵌入不
 - 微信 `appId` / `appSecret`
 - 飞书 `appId` / `appSecret`
 - 飞书目标文件夹 token、所有者 User ID
-- Chrome companion 端口和连接令牌
+- Chrome companion 端口、连接令牌和可选的 Substack 发布地址
 - 微信草稿或素材缓存记录
 
 请不要把 `data.json` 提交到公开 Git 仓库，也不要把包含它的 vault 公开分享。如果你的 vault 会通过 iCloud、网盘、Git 等方式同步，这些密钥也会一起同步。
@@ -260,7 +260,9 @@ Obsidian to Publish 默认本地处理。预览、复制、本地图片嵌入不
 
 Chrome companion 是可选能力，只适合桌面端。它通过本机 WebSocket 接收 Obsidian 发来的发布包，然后在你已登录的平台页面上尝试填入内容。
 
-它不会把发布包发送到扩展作者服务器。真实风险主要来自本机环境：如果连接令牌泄露，本机其它进程可能尝试连接这个本地端口。你可以在插件设置里随时重置令牌。
+它不会把发布包发送到扩展作者服务器。为了支持页面加载后的重试和手动回退，Chrome companion 会把最近一次发布包短暂保存在 Chrome 本地扩展存储中，发布包可能包含文章正文、HTML、Markdown 和本地图片数据。缓存默认 30 分钟后过期；你也可以在扩展选项页点击「清空发布缓存」立即清除。Substack 发布地址只会从你打开过的个人 Substack 后台页识别，或由你在扩展选项页手动填写；识别不到时不会打开公共发现页。
+
+真实风险主要来自本机环境：如果连接令牌泄露，本机其它进程可能尝试连接这个本地端口。你可以在插件设置里随时重置令牌。
 
 ## 贡献
 
@@ -275,8 +277,7 @@ Chrome companion 是可选能力，只适合桌面端。它通过本机 WebSocke
 ## 联系作者
 
 - 作者：Next蔡蔡
-- GitHub：[@nextcaicai](https://github.com/nextcaicai)
-- 仓库：[nextcaicai/obsidian-to-publish](https://github.com/nextcaicai/obsidian-to-publish)
+- X：[@aiyacaicai](https://x.com/aiyacaicai)
 - 问题反馈：[GitHub Issues](https://github.com/nextcaicai/obsidian-to-publish/issues)
 
 ## License

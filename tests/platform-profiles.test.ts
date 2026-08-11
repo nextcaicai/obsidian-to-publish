@@ -71,7 +71,7 @@ describe("platform profiles", () => {
 		expect(PLATFORM_PROFILES.zhihu.editorUrl).toBe("https://zhuanlan.zhihu.com/write");
 		expect(PLATFORM_PROFILES.csdn.editorUrl).toBe("https://editor.csdn.net/md/");
 		expect(PLATFORM_PROFILES.juejin.editorUrl).toBe("https://juejin.cn/editor/drafts/new?v=2");
-		expect(PLATFORM_PROFILES.substack.editorUrl).toBe("https://nextcaicai.substack.com/publish/post/");
+		expect(PLATFORM_PROFILES.substack.editorUrl).toBe("https://substack.com/publish/post/");
 	});
 
 	it("marks platforms that require remote image URLs", () => {

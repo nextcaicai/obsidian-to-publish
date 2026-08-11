@@ -1,5 +1,6 @@
 const handledTaskIds = new Set();
 
+void rememberCurrentSubstackEditorUrl();
 void initCompanionPanel();
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 	if (!message || typeof message !== "object") {
@@ -39,6 +40,33 @@ async function initCompanionPanel() {
 	}
 
 	await handleDeliveredTask(task);
+}
+
+async function rememberCurrentSubstackEditorUrl() {
+	if (window.top !== window || !isSubstackPublisherUrl(window.location.href)) {
+		return;
+	}
+
+	try {
+		await chrome.runtime.sendMessage({
+			type: "substack.rememberEditorUrl",
+			url: window.location.href
+		});
+	} catch {
+		// The background service worker may be restarting; import still works without this hint.
+	}
+}
+
+function isSubstackPublisherUrl(value) {
+	try {
+		const url = new URL(value);
+		const path = url.pathname.replace(/\/+$/g, "");
+		return url.protocol === "https:"
+			&& url.hostname.endsWith(".substack.com")
+			&& (path === "/publish" || path.startsWith("/publish/"));
+	} catch {
+		return false;
+	}
 }
 
 async function handleDeliveredTask(task) {

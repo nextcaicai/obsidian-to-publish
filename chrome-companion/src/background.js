@@ -3,19 +3,22 @@ const STORAGE_KEYS = {
 	port: "bridgePort",
 	token: "bridgeToken",
 	latestTask: "latestTask",
+	substackEditorUrl: "substackEditorUrl",
 	// Legacy aggregate map. Kept for migration/read fallback only.
 	tasksByPlatform: "tasksByPlatform"
 };
 const TASK_KEY_PREFIX = "task:";
 const TASK_DELIVER_RETRY_LIMIT = 40;
 const TASK_DELIVER_RETRY_MS = 500;
+const TASK_CACHE_TTL_MS = 30 * 60 * 1000;
+const SUBSTACK_ARTICLE_PATH = "/publish/post?type=newsletter";
 
 const SUPPORTED_PLATFORMS = [
 	{ id: "x", label: "X Articles", editorUrl: "https://x.com/compose/articles" },
 	{ id: "csdn", label: "CSDN", editorUrl: "https://editor.csdn.net/md/" },
 	{ id: "juejin", label: "掘金", editorUrl: "https://juejin.cn/editor/drafts/new?v=2" },
 	{ id: "zhihu", label: "知乎", editorUrl: "https://zhuanlan.zhihu.com/write" },
-	{ id: "substack", label: "Substack", editorUrl: "https://nextcaicai.substack.com/publish/post/" },
+	{ id: "substack", label: "Substack", editorUrl: "" },
 	{ id: "xiaohongshu", label: "小红书", editorUrl: "https://creator.xiaohongshu.com/publish/publish?from=menu&target=article" },
 	{ id: "bilibili", label: "B站专栏", editorUrl: "https://member.bilibili.com/platform/upload/text" },
 	{ id: "zhishixingqiu", label: "知识星球", editorUrl: "https://wx.zsxq.com" }
@@ -108,6 +111,29 @@ async function handleRuntimeMessage(message, sender) {
 		const tabId = typeof sender?.tab?.id === "number" ? sender.tab.id : null;
 		await clearTask({ platform, tabId });
 		return { ok: true };
+	}
+
+	if (message.type === "task.clearAll") {
+		await clearTask();
+		return { ok: true };
+	}
+
+	if (message.type === "substack.rememberEditorUrl") {
+		const remembered = await rememberSubstackEditorUrl(message.url);
+		return { ok: remembered };
+	}
+
+	if (message.type === "substack.saveEditorUrl") {
+		return saveSubstackEditorUrl(message.url);
+	}
+
+	if (message.type === "substack.detectEditorUrl") {
+		const editorUrl = await findOpenSubstackEditorUrl();
+		if (editorUrl) {
+			await rememberSubstackEditorUrl(editorUrl);
+			return { ok: true, editorUrl };
+		}
+		return { ok: false, error: "not_found" };
 	}
 
 	return { ok: false, error: "unknown_message" };
@@ -326,11 +352,15 @@ async function importDraft(params) {
 		throw new Error("Invalid publish package.");
 	}
 
-	const platform = resolveTargetPlatform(publishPackage);
+	await clearExpiredTasks();
+
+	const platform = await resolveTargetPlatform(publishPackage);
+	const createdAtMs = Date.now();
 	const task = {
 		id: publishPackage.requestId,
 		platform: platform.id,
-		createdAt: new Date().toISOString(),
+		createdAt: new Date(createdAtMs).toISOString(),
+		expiresAt: new Date(createdAtMs + TASK_CACHE_TTL_MS).toISOString(),
 		package: publishPackage
 	};
 
@@ -412,20 +442,31 @@ function createLightweightTask(task) {
 async function resolveTaskForRequest(platform, tabId) {
 	if (typeof tabId === "number" && tasksByTabId.has(tabId)) {
 		const tabTask = tasksByTabId.get(tabId);
-		if (!platform || tabTask.platform === platform) {
+		if (isTaskExpired(tabTask)) {
+			await clearTask({ platform: tabTask?.platform || platform, tabId });
+		} else if (!platform || tabTask.platform === platform) {
 			return tabTask;
 		}
 	}
 
 	if (platform && tasksByPlatformMemory.has(platform)) {
-		return tasksByPlatformMemory.get(platform);
+		const memoryTask = tasksByPlatformMemory.get(platform);
+		if (isTaskExpired(memoryTask)) {
+			await clearTask({ platform });
+		} else {
+			return memoryTask;
+		}
 	}
 
 	if (platform) {
 		const storedPlatformTask = await readPlatformTask(platform);
 		if (storedPlatformTask) {
-			tasksByPlatformMemory.set(platform, storedPlatformTask);
-			return storedPlatformTask;
+			if (isTaskExpired(storedPlatformTask)) {
+				await clearTask({ platform });
+			} else {
+				tasksByPlatformMemory.set(platform, storedPlatformTask);
+				return storedPlatformTask;
+			}
 		}
 	}
 
@@ -433,10 +474,95 @@ async function resolveTaskForRequest(platform, tabId) {
 		[STORAGE_KEYS.latestTask]: null
 	});
 	if (latestTask && (!platform || latestTask.platform === platform)) {
-		return latestTask;
+		if (isTaskExpired(latestTask)) {
+			await clearTask({ platform: latestTask.platform || platform });
+		} else {
+			return latestTask;
+		}
 	}
 
 	return null;
+}
+
+async function clearExpiredTasks() {
+	const expiredPlatforms = new Set();
+	for (const [tabId, task] of tasksByTabId.entries()) {
+		if (!isTaskExpired(task)) {
+			continue;
+		}
+		tasksByTabId.delete(tabId);
+		clearDeliverTimer(tabId);
+		if (task.platform) {
+			expiredPlatforms.add(task.platform);
+		}
+	}
+
+	for (const [platform, task] of tasksByPlatformMemory.entries()) {
+		if (!isTaskExpired(task)) {
+			continue;
+		}
+		tasksByPlatformMemory.delete(platform);
+		expiredPlatforms.add(platform);
+	}
+
+	const storageDefaults = {
+		[STORAGE_KEYS.latestTask]: null,
+		[STORAGE_KEYS.tasksByPlatform]: {}
+	};
+	for (const item of SUPPORTED_PLATFORMS) {
+		storageDefaults[getPlatformTaskKey(item.id)] = null;
+	}
+
+	const stored = await chrome.storage.local.get(storageDefaults);
+	const keysToRemove = [];
+	const updates = {};
+	const tasksByPlatform = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
+		? { ...stored[STORAGE_KEYS.tasksByPlatform] }
+		: {};
+
+	for (const item of SUPPORTED_PLATFORMS) {
+		const platformTask = stored[getPlatformTaskKey(item.id)];
+		if (platformTask && isTaskExpired(platformTask)) {
+			keysToRemove.push(getPlatformTaskKey(item.id));
+			expiredPlatforms.add(item.id);
+		}
+		if (tasksByPlatform[item.id] && isTaskExpired(tasksByPlatform[item.id])) {
+			delete tasksByPlatform[item.id];
+			expiredPlatforms.add(item.id);
+		}
+	}
+
+	if (stored[STORAGE_KEYS.latestTask] && isTaskExpired(stored[STORAGE_KEYS.latestTask])) {
+		updates[STORAGE_KEYS.latestTask] = null;
+	}
+
+	for (const platform of expiredPlatforms) {
+		delete tasksByPlatform[platform];
+	}
+	if (expiredPlatforms.size > 0) {
+		updates[STORAGE_KEYS.tasksByPlatform] = tasksByPlatform;
+	}
+
+	if (Object.keys(updates).length > 0) {
+		await chrome.storage.local.set(updates);
+	}
+	if (keysToRemove.length > 0) {
+		await chrome.storage.local.remove(keysToRemove);
+	}
+}
+
+function isTaskExpired(task) {
+	if (!task || typeof task !== "object") {
+		return false;
+	}
+
+	const expiresAt = Date.parse(task.expiresAt || "");
+	if (Number.isFinite(expiresAt)) {
+		return expiresAt <= Date.now();
+	}
+
+	const createdAt = Date.parse(task.createdAt || "");
+	return Number.isFinite(createdAt) && createdAt + TASK_CACHE_TTL_MS <= Date.now();
 }
 
 async function readPlatformTask(platform) {
@@ -552,14 +678,124 @@ function getPlatformTaskKey(platformId) {
 	return `${TASK_KEY_PREFIX}${platformId}`;
 }
 
-function resolveTargetPlatform(publishPackage) {
+async function resolveTargetPlatform(publishPackage) {
 	const target = Array.isArray(publishPackage.targets) ? publishPackage.targets[0] : "";
 	const platform = SUPPORTED_PLATFORMS.find((item) => item.id === target);
 	if (!platform) {
 		throw new Error(`Unsupported target platform: ${target}`);
 	}
 
+	if (platform.id === "substack") {
+		return {
+			...platform,
+			editorUrl: await resolveSubstackEditorUrl()
+		};
+	}
+
 	return platform;
+}
+
+async function resolveSubstackEditorUrl() {
+	const stored = await chrome.storage.local.get({
+		[STORAGE_KEYS.substackEditorUrl]: ""
+	});
+	const storedUrl = normalizeSubstackEditorUrl(stored[STORAGE_KEYS.substackEditorUrl]);
+	if (storedUrl && isPersonalSubstackEditorUrl(storedUrl)) {
+		return storedUrl;
+	}
+
+	const detectedUrl = await findOpenSubstackEditorUrl();
+	if (detectedUrl) {
+		await rememberSubstackEditorUrl(detectedUrl);
+		return detectedUrl;
+	}
+
+	throw new Error(
+		"substack_publisher_not_found: Open your personal Substack publisher page or save its URL in the Chrome extension options."
+	);
+}
+
+async function findOpenSubstackEditorUrl() {
+	if (!chrome.tabs?.query) {
+		return "";
+	}
+	try {
+		const tabs = await chrome.tabs.query({
+			url: ["https://*.substack.com/publish/*"]
+		});
+		const personalTab = tabs.find((tab) => isPersonalSubstackEditorUrl(tab.url));
+		return normalizeSubstackEditorUrl(personalTab?.url) || "";
+	} catch {
+		return "";
+	}
+}
+
+async function rememberSubstackEditorUrl(value) {
+	const normalized = normalizeSubstackEditorUrl(value);
+	if (!isPersonalSubstackEditorUrl(normalized)) {
+		return false;
+	}
+	await chrome.storage.local.set({
+		[STORAGE_KEYS.substackEditorUrl]: normalized
+	});
+	return true;
+}
+
+async function saveSubstackEditorUrl(value) {
+	const raw = typeof value === "string" ? value.trim() : "";
+	if (!raw) {
+		await chrome.storage.local.remove(STORAGE_KEYS.substackEditorUrl);
+		return { ok: true, editorUrl: "" };
+	}
+
+	const normalized = normalizeSubstackEditorUrl(raw);
+	if (!normalized) {
+		return { ok: false, error: "invalid_url" };
+	}
+
+	await chrome.storage.local.set({
+		[STORAGE_KEYS.substackEditorUrl]: normalized
+	});
+	return { ok: true, editorUrl: normalized };
+}
+
+function normalizeSubstackEditorUrl(value) {
+	const text = String(value || "")
+		.trim()
+		.replace(/[，,。；;]+$/g, "")
+		.trim();
+	if (!text) {
+		return "";
+	}
+
+	try {
+		const url = new URL(text);
+		if (url.protocol !== "https:") {
+			return "";
+		}
+		if (!url.hostname.endsWith(".substack.com")) {
+			return "";
+		}
+		const path = url.pathname.replace(/\/+$/g, "");
+		if (path !== "/publish" && !path.startsWith("/publish/")) {
+			return "";
+		}
+		return `${url.origin}${SUBSTACK_ARTICLE_PATH}`;
+	} catch {
+		return "";
+	}
+}
+
+function isPersonalSubstackEditorUrl(value) {
+	const normalized = normalizeSubstackEditorUrl(value);
+	if (!normalized) {
+		return false;
+	}
+	try {
+		return new URL(normalized).hostname.endsWith(".substack.com");
+	} catch {
+		return false;
+	}
 }
 
 function isPlainObject(value) {
@@ -590,9 +826,13 @@ function sendBridgeMessage(payload) {
 
 if (globalThis.__OTP_COMPANION_BACKGROUND_TEST__ === true) {
 	globalThis.OTPCompanionBackground = {
+		clearTask,
 		closeBridge,
 		connectBridge,
 		getConnectionState: () => ({ ...connectionState }),
+		importDraft,
+		isTaskExpired,
+		normalizeSubstackEditorUrl,
 		reconnectBridge
 	};
 }

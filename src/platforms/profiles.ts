@@ -463,7 +463,7 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 		id: "substack",
 		label: "Substack",
 		copyLabel: "Substack",
-		editorUrl: "https://nextcaicai.substack.com/publish/post/",
+		editorUrl: "https://substack.com/publish/post/",
 		preferredFormat: "rich-html",
 		capabilities: {
 			...RICH_HTML_CAPABILITIES,

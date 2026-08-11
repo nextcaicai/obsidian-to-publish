@@ -120,9 +120,14 @@
 		<label for="token">连接令牌</label>
 		<input id="token" type="password" autocomplete="off" placeholder="从 Obsidian 插件设置复制">
 
+		<label for="substack-url">Substack 发布地址</label>
+		<input id="substack-url" placeholder="https://yourname.substack.com/publish/home">
+
 		<button id="save" type="button">保存并连接</button>
 		<button id="show-token" class="secondary" type="button">显示/隐藏令牌</button>
 		<button id="status" class="secondary" type="button">刷新状态</button>
+		<button id="clear-cache" class="secondary" type="button">清空发布缓存</button>
+		<button id="detect-substack" class="secondary" type="button">检测 Substack</button>
 
 		<div class="status-card" aria-live="polite">
 			<span id="status-dot" class="status-dot offline"></span>

@@ -790,6 +790,11 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		} catch (error) {
 			console.error(error);
 			if (shouldNotify) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				if (errorMessage.includes("substack_publisher_not_found")) {
+					new Notice("未识别到个人 Substack。请先在 Chrome 打开自己的 Substack 后台，或在扩展选项中填写发布地址。");
+					return false;
+				}
 				const status = this.getChromeCompanionBridgeStatus();
 				const hint = status.hasClient ? "请查看控制台。" : "请确认 Chrome companion 已加载并填入令牌。";
 				new Notice(`发送到 Chrome 插件失败，${hint}`);
