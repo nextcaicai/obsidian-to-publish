@@ -4,8 +4,7 @@
 
 这个插件一开始是用来解决我自己多平台发布的痛点。以前在 Obsidian 创作完成后，要同步到其它平台很不方便，尤其是图片上传这活，每个平台都得上传一遍，手动操作一两次后就劝退了。所以我就想着把文档从 Obsidian 上传到多平台这一步直接解决掉。目前这个插件支持 Obsidian 文稿一键上传到微信公众号、飞书文档、知乎、知识星球、X、Substack、bilibili 图文、小红书图文、掘金等平台，后续会增加更多平台支持。
 
-> [!NOTE]
-> 截图待补：这里建议放一张插件右侧预览 + 平台按钮的总览图。
+![Obsidian to Publish 右侧预览面板](docs/assets/readme/overview-preview-panel.png)
 
 ## 核心功能
 
@@ -44,9 +43,6 @@ CSDN 的适配代码目前仍在仓库中，但入口暂时隐藏，因为草稿
 
 也就是说：公众号和飞书走官方 API，只需要安装 Obsidian 插件；其它平台如果只复制粘贴，也只需要 Obsidian 插件；如果想让插件自动打开平台编辑器、填入内容、处理图片上传，就需要额外安装 Chrome 插件。
 
-> [!NOTE]
-> 截图待补：这里建议放一张 Obsidian 插件启用后、右侧预览面板和平台选择器的截图。
-
 ### 方法一：通过 BRAT 插件安装
 
 BRAT（Beta Reviewers Auto-update Tester）是 Obsidian 社区常用的测试版插件安装工具。这个方法适合不想手动复制文件的用户。
@@ -65,8 +61,7 @@ https://github.com/nextcaicai/obsidian-to-publish
 7. 回到「设置 → 第三方插件」，启用 `Obsidian to Publish`。
 8. 如果后续仓库发布新版本，可以通过 BRAT 更新。
 
-> [!NOTE]
-> 截图待补：这里建议放 3 张图：BRAT 插件页、添加 beta plugin 的命令面板、启用 Obsidian to Publish 的插件页。
+![通过 BRAT 添加 Obsidian to Publish](docs/assets/readme/brat-add-plugin.png)
 
 ### 方法二：把项目发给 Agent 安装
 
@@ -97,19 +92,23 @@ https://github.com/nextcaicai/obsidian-to-publish
 
 这个方法的关键是：Agent 不需要理解整个项目，只需要找到 Obsidian 插件实际加载的 3 个文件，并把它们放到正确目录。
 
-> [!NOTE]
-> 截图待补：这里建议放一张 Agent 执行安装后，目标插件目录里包含 `manifest.json`、`main.js`、`styles.css` 的截图。
+### 方法三：从 Releases 下载文件安装
 
-### 方法三：自己从源码安装
+如果你不想安装 BRAT，也不想让 Agent 操作，可以直接从 GitHub Releases 下载已经构建好的插件文件。
 
-如果你熟悉命令行，可以手动构建并安装。
+1. 打开项目的 [Releases 页面](https://github.com/nextcaicai/obsidian-to-publish/releases)。
+2. 选择最新版本。
+3. 下载发布附件里的插件文件。如果有压缩包，先解压；如果是单独文件，请下载下面 3 个文件：
+   - `manifest.json`
+   - `main.js`
+   - `styles.css`
+4. 在你的 vault 里创建插件目录：
 
-```bash
-npm install
-npm run build
+```text
+<Vault>/.obsidian/plugins/obsidian-to-publish/
 ```
 
-然后把下面 3 个文件复制到你的测试 vault：
+5. 把下载到的 3 个文件放进去，最终目录应该是：
 
 ```text
 <Vault>/.obsidian/plugins/obsidian-to-publish/
@@ -118,13 +117,12 @@ npm run build
   styles.css
 ```
 
-回到 Obsidian，打开「设置 → 第三方插件」，启用 `Obsidian to Publish`。
+6. 回到 Obsidian，打开「设置 → 第三方插件」，启用 `Obsidian to Publish`。
+7. 如果已经打开过 Obsidian，建议重载插件或重启 Obsidian。
 
 > [!WARNING]
 > 不建议在主力 vault 里开发或测试插件。请先用单独的测试 vault 验证，避免插件 bug 影响真实笔记。
 
-> [!NOTE]
-> 截图待补：这里建议放 Obsidian 第三方插件启用页截图。
 
 ### 安装配套 Chrome 插件
 
@@ -147,29 +145,28 @@ npm run build
 
 Chrome 插件的详细说明见 [chrome-companion/README.md](chrome-companion/README.md)。
 
-> [!NOTE]
-> 截图待补：这里建议放 4 张图：Obsidian 里的 Chrome 插件连接设置、Chrome 扩展加载页、扩展选项页、目标平台编辑器填入结果。
+![Obsidian 里的 Chrome 插件连接设置](docs/assets/readme/chrome-connection-settings.png)
+
 
 ### 使用微信公众号
 
 微信公众号建议走官方 API。这样做的好处是：正文、图片和封面可以直接进入公众号草稿箱，不需要在编辑器里反复复制粘贴。
 
-1. 登录 [微信公众平台](https://mp.weixin.qq.com/)。
-2. 进入「设置与开发 → 基本配置」或「开发与配置」相关页面。
-3. 获取并保存公众号的 `AppID` 和 `AppSecret`。
-4. 在 Obsidian 打开「设置 → Obsidian to Publish → 微信公众号草稿箱」。
-5. 打开「启用微信官方 API」。
-6. 填入「微信 AppID」和「微信 AppSecret」。
-7. 点击「微信出口 IP → 检测」，复制检测到的 IPv4。
-8. 回到公众号后台，把这个 IP 加入「IP 白名单」。
-9. 可选填写作者、默认摘要、原文链接、留言设置。
-10. 打开要发布的笔记，在插件预览面板选择「微信公众号」。
-11. 点击创建或同步微信草稿的按钮，成功后到公众号草稿箱检查排版。
+1. 打开 [微信开发者平台](https://developers.weixin.qq.com/)。
+2. 登录后进入控制台，选中「公众号」进行「基础信息」或类似入口页。
+3. 在该页面复制并保存 `AppID`。
+4. 在同一页面启用或重置 `AppSecret`，按平台提示完成扫码验证后立即复制保存。
+5. 在 Obsidian 打开「设置 → Obsidian to Publish → 微信公众号草稿箱」。
+6. 打开「启用微信官方 API」。
+7. 填入「微信 AppID」和「微信 AppSecret」。
+8. 点击「微信出口 IP → 检测」，复制检测到的 IPv4。
+9. 回到微信开发者平台，在该公众号的 API IP 白名单设置中加入这个 IPv4。
+10. 可选填写作者、默认摘要、原文链接、留言设置。
+11. 打开要发布的笔记，在插件预览面板选择「微信公众号」。
+12. 点击创建或同步微信草稿的按钮，成功后到公众号草稿箱检查排版。
 
-> [!NOTE]
-> 截图待补：这里建议放 3 张图：公众号后台 AppID / AppSecret 位置、插件微信设置页、草稿箱生成结果。
+如果遇到 `40164`，通常是当前出口 IP 没有加入公众号 API IP 白名单。以插件提示或微信接口返回的 IP 为准，回到微信开发者平台重新加入白名单后再试。
 
-如果遇到 `40164`，通常是当前出口 IP 没有加入公众号 API 白名单。以插件提示或微信接口返回的 IP 为准，重新加入白名单后再试。
 
 ### 使用飞书文档
 
@@ -189,10 +186,8 @@ Chrome 插件的详细说明见 [chrome-companion/README.md](chrome-companion/RE
 12. 打开要同步的笔记，在插件预览面板选择「飞书云文档」。
 13. 点击同步飞书文档的按钮，成功后打开返回的飞书文档链接检查内容。
 
-> [!NOTE]
-> 截图待补：这里建议放 4 张图：飞书应用凭证页、应用权限页、目标文件夹分享设置、插件飞书设置页。
-
 如果同步失败，优先检查三件事：应用权限是否已生效、目标文件夹是否已共享给应用机器人、文件夹 token 是否填写正确。
+
 
 ### 使用其它平台
 
@@ -214,9 +209,6 @@ Chrome 插件的详细说明见 [chrome-companion/README.md](chrome-companion/RE
 7. 粘贴内容。
 8. 手动检查图片、空行、表格和代码块，必要时在平台编辑器里微调。
 
-> [!NOTE]
-> 截图待补：这里建议放平台选择器、复制按钮、目标平台粘贴结果三张图。
-
 Chrome 插件同步流程：
 
 1. 确认 Obsidian 插件和 Chrome 插件都已安装。
@@ -226,6 +218,9 @@ Chrome 插件同步流程：
 5. 运行发送到 Chrome 插件的命令。
 6. Chrome 插件会打开或定位目标平台编辑器，并尝试填入草稿。
 7. 完成后手动检查标题、正文、图片、表格和代码块，再在平台内发布。
+
+<video controls src="docs/assets/readme/platform-zhihu-filled-editor.mp4" title="知乎编辑器填入演示"></video>
+
 
 ## 安全说明
 
