@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-to-publish",
-	"version": "0.2.1",
+	"version": "0.2.2",
 	"description": "Preview notes, copy platform-ready rich HTML/Markdown, and optionally publish via WeChat, Feishu, or Chrome companion.",
 	"main": "main.js",
 	"scripts": {
