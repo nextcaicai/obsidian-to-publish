@@ -537,8 +537,22 @@ export function normalizeWechatDraftHtml(html: string): string {
 	result = unwrapWechatListItemParagraphs(result);
 	result = removeWechatEmptyListItems(result);
 	result = removeWechatEmptyParagraphs(result);
+	result = preserveWechatCodeBlockLineBreaks(result);
 	result = compactWechatBlockWhitespace(result);
 	return result;
+}
+
+/**
+ * The clipboard path keeps raw newlines inside <pre> via CSS `white-space`,
+ * but WeChat's draft HTML parser collapses those text newlines to spaces.
+ * Emit explicit breaks so API-created drafts render code like the preview.
+ */
+function preserveWechatCodeBlockLineBreaks(html: string): string {
+	return String(html || "").replace(
+		/(<pre\b[^>]*>)([\s\S]*?)(<\/pre>)/gi,
+		(_match, open: string, content: string, close: string) =>
+			`${open}${content.replace(/\r\n?|\n/g, "<br>")}${close}`
+	);
 }
 
 const WECHAT_BLOCK_TAGS =

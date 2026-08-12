@@ -195,6 +195,14 @@ describe("official publishing", () => {
 		expect(normalized).not.toContain("<body");
 	});
 
+	it("preserves code block line breaks for WeChat drafts", () => {
+		const normalized = normalizeWechatDraftHtml(
+			'<pre style="white-space:pre-wrap"><code>第一行\n第二行\n  保留缩进</code></pre>'
+		);
+
+		expect(normalized).toContain("第一行<br>第二行<br>  保留缩进");
+	});
+
 	it("creates a WeChat draft from a publish package request sequence", async () => {
 		const requests: Array<{ url: string; method: string; body?: string | ArrayBuffer }> = [];
 		const request: OfficialRequest = async (options) => {
