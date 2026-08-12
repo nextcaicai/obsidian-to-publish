@@ -655,12 +655,27 @@ export class WechatOfficialClient {
 			return this.accessToken;
 		}
 
-		const url = `${WECHAT_API_BASE_URL}/token?grant_type=client_credential&appid=${encodeURIComponent(this.settings.appId)}&secret=${encodeURIComponent(this.settings.appSecret)}`;
-		const response = await this.sendRequest("获取微信 access_token", { url, method: "GET" });
+		// The legacy /token endpoint invalidates the previous token when another
+		// client fetches one for the same AppID. Stable tokens avoid that race,
+		// which otherwise surfaces as WeChat error 40001 mid-draft upload.
+		const url = `${WECHAT_API_BASE_URL}/stable_token`;
+		const response = await this.sendRequest("获取微信稳定版 access_token", {
+			url,
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json; charset=utf-8"
+			},
+			body: JSON.stringify({
+				grant_type: "client_credential",
+				appid: this.settings.appId,
+				secret: this.settings.appSecret,
+				force_refresh: false
+			})
+		});
 		const data = responseJsonRecord(response);
 		const token = typeof data.access_token === "string" ? data.access_token : "";
 		if (!token) {
-			throw createWechatApiError("获取微信 access_token", data);
+			throw createWechatApiError("获取微信稳定版 access_token", data);
 		}
 
 		const expiresIn = typeof data.expires_in === "number" && Number.isFinite(data.expires_in)

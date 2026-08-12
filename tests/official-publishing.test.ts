@@ -204,7 +204,14 @@ describe("official publishing", () => {
 				body: options.body
 			});
 
-			if (options.url.includes("/token?")) {
+			if (options.url.endsWith("/stable_token")) {
+				expect(options.method).toBe("POST");
+				expect(JSON.parse(String(options.body))).toEqual({
+					grant_type: "client_credential",
+					appid: "wx-app",
+					secret: "secret",
+					force_refresh: false
+				});
 				return { status: 200, json: { access_token: "token", expires_in: 7200 } };
 			}
 			if (options.url.includes("/material/add_material")) {
@@ -262,7 +269,7 @@ describe("official publishing", () => {
 
 	it("falls back to a public IPv4 detector when WeChat omits the rejected IP", async () => {
 		const result = await detectWechatOutboundIp(createWechatSettings(), async (options) => {
-			if (options.url.includes("/token?")) {
+			if (options.url.endsWith("/stable_token")) {
 				return {
 					status: 200,
 					json: {
@@ -313,7 +320,7 @@ describe("official publishing", () => {
 		}];
 		const request: OfficialRequest = async (options) => {
 			requests.push({ url: options.url, body: options.body });
-			if (options.url.includes("/token?")) {
+			if (options.url.endsWith("/stable_token")) {
 				return { status: 200, json: { access_token: "token", expires_in: 7200 } };
 			}
 			if (options.url.includes("/material/get_material")) {
@@ -361,7 +368,7 @@ describe("official publishing", () => {
 			updatedAt: "2026-08-05T00:00:00.000Z"
 		}];
 		const request: OfficialRequest = async (options) => {
-			if (options.url.includes("/token?")) {
+			if (options.url.endsWith("/stable_token")) {
 				return { status: 200, json: { access_token: "token", expires_in: 7200 } };
 			}
 			if (options.url.includes("/material/get_material")) {
@@ -398,7 +405,7 @@ describe("official publishing", () => {
 		const pkg = createPackage();
 		pkg.article.html = '<html><body><section><p><img src="https://images.example.com/remote.png"></p><p><img src="data:image/png;base64,abc"></p></section></body></html>';
 		const request: OfficialRequest = async (options) => {
-			if (options.url.includes("/token?")) {
+			if (options.url.endsWith("/stable_token")) {
 				return { status: 200, json: { access_token: "token", expires_in: 7200 } };
 			}
 			if (options.url.includes("/material/add_material")) {
