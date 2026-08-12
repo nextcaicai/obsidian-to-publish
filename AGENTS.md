@@ -20,6 +20,7 @@
 - 生产构建与类型检查：`npm run build`
 - 自动化测试：`npm test`
 - 测试监听：`npm run test:watch`
+- 打包 GitHub Release 四件套：`npm run package:release`（输出到 `dist/release/`）
 - 当前项目没有 lint 脚本时，不要假装已执行 lint；如需新增 lint，先说明原因。
 
 ## Obsidian 插件开发规则
@@ -35,7 +36,102 @@
 - 修改 `manifest.json` 后，需要重启 Obsidian 或重新加载插件环境，避免 UI 中仍显示旧名称、版本或能力声明。
 - `manifest.json` 的 `id` 一旦发布就视为稳定标识，不要随意改名；改 ID 会影响用户已有安装与设置数据。
 - 使用新 Obsidian API 时同步检查 `minAppVersion`；如果最低版本提高，要说明对旧版用户的影响。
-- 发布版本时保持 `package.json`、`manifest.json`、`versions.json` 版本一致。GitHub Release 的 tag 应与 `manifest.json` 的版本号完全一致，不加 `v` 前缀。
+- 发布版本时遵守下方「GitHub Release 规范」；不要只改一个版本号文件。
+
+## GitHub Release 规范
+
+每次正式发布必须遵循本规范。其它 Agent 执行「发布 release / 打版本」任务时，以本节为准，不要临时发明附件结构或 tag 格式。
+
+### 版本与 tag
+
+- 版本号采用 semver，例如 `0.2.2`。
+- **必须一致**的版本字段：
+  - `package.json` → `version`
+  - `manifest.json` → `version`（Obsidian 插件）
+  - `versions.json` → 新增 `"<version>": "<minAppVersion>"` 条目
+  - `chrome-companion/manifest.json` → `version`（与插件同号）
+- GitHub Release **tag = 版本号本身**，例如 `0.2.2`，**不加** `v` 前缀（不要用 `v0.2.2`）。
+- Release 标题使用同一版本号，例如 `0.2.2`。
+- 仓库远程默认是 `nextcaicai/obsidian-to-publish`。
+
+### 固定附件（每次恰好 4 个）
+
+每个 Release **固定上传且仅上传**以下 4 个文件（不要合并成一个总包，也不要附源码 tarball 当安装包）：
+
+| # | 文件 | 用途 |
+| --- | --- | --- |
+| 1 | `main.js` | Obsidian 插件打包产物 |
+| 2 | `manifest.json` | Obsidian 插件清单 |
+| 3 | `styles.css` | Obsidian 插件样式 |
+| 4 | `obsidian-to-publish-companion-<version>.zip` | 配套 Chrome 扩展安装包 |
+
+Chrome zip 约定：
+
+- 文件名：`obsidian-to-publish-companion-0.2.2.zip`（版本与插件相同）。
+- zip 内必须有**一层**顶层目录 `obsidian-to-publish-companion/`，其下直接是扩展根文件（`manifest.json`、`options.html`、`icons/`、`src/`）。
+- 用户解压后，在 `chrome://extensions` 选择该顶层目录做「加载已解压的扩展程序」。
+- **不要**发 `.crx`；Chrome 旁路安装 `.crx` 对普通用户不可用。
+- zip 内不要混入 Obsidian 的 `main.js` / 插件 `manifest.json`。
+- 只用公众号/飞书的用户可以忽略 Companion zip；Release 说明里写清楚。
+
+### 打包命令
+
+在仓库根目录：
+
+```bash
+npm test
+npm run package:release
+```
+
+`npm run package:release` 会：
+
+1. 校验插件 / package / companion / `versions.json` 版本一致
+2. 执行 `npm run build`
+3. 把 4 个资产输出到 `dist/release/`
+
+`dist/` 已 gitignore，不要提交构建产物目录。
+
+### 发布检查清单（按顺序）
+
+1. 工作区干净或仅包含本版本应发布的改动；`main` 与要发布内容一致。
+2. 将四个版本相关文件升到目标版本（见上）。
+3. 更新 Release notes 要点（用户可见变更，中文即可）。
+4. `npm test` 全部通过。
+5. `npm run package:release`，确认 `dist/release/` 中恰有 4 个文件。
+6. 提交版本 bump（及文档/脚本等必要文件），message 示例：`Release 0.2.2: <short summary>`。
+7. `git push origin main`（仅在用户明确要求发布时执行 push / 创建 Release）。
+8. 创建 GitHub Release（tag 无 `v` 前缀），挂上 `dist/release/` 里全部 4 个文件：
+
+```bash
+VERSION=0.2.2
+gh release create "$VERSION" \
+  "dist/release/main.js" \
+  "dist/release/manifest.json" \
+  "dist/release/styles.css" \
+  "dist/release/obsidian-to-publish-companion-${VERSION}.zip" \
+  --title "$VERSION" \
+  --notes-file path/to/notes.md
+```
+
+若 notes 用 heredoc 内联也可以，但附件列表不可缺项。
+
+9. 用 `gh release view "$VERSION"` 核对 tag、标题、4 个 asset 名称。
+
+### Release notes 最低要求
+
+- 写清本版本用户可见变更。
+- 说明 Obsidian 三件套安装路径：`<Vault>/.obsidian/plugins/obsidian-to-publish/`。
+- 说明 Companion：从 Release 下载 zip → 解压 → Chrome「加载已解压」选 `obsidian-to-publish-companion` 目录；仅一键导入浏览器编辑器时需要。
+- 附上 Full Changelog 链接：`https://github.com/nextcaicai/obsidian-to-publish/compare/<prev>...<version>`。
+
+### 明确不要做的事
+
+- 不要用 `v0.x.x` 作为 tag。
+- 不要只发 Obsidian 三件套而漏掉 Companion zip。
+- 不要把 Companion 与 Obsidian 文件打成同一个 zip 当唯一附件。
+- 不要在未运行 `npm test` + `package:release` 的情况下凭手感上传旧 `main.js`。
+- 不要自动 `git push` / `gh release create`，除非用户明确要求发布。
+- 不要把 `data.json`、token、密钥、本机绝对路径写进附件或 notes。
 
 ## 代码结构约定
 

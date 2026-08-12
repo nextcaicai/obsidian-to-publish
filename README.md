@@ -130,18 +130,21 @@ https://github.com/nextcaicai/obsidian-to-publish
 
 如果你想一键同步到其它平台编辑器，例如知乎、知识星球、X、Substack、Bilibili、小红书、掘金，就需要安装配套的 Chrome 插件。原因是这些平台通常没有开放适合个人直接写入草稿箱的官方 API，插件需要借助你本机已登录的 Chrome 页面完成填入和图片上传。
 
-安装步骤：
+安装步骤（推荐：从 GitHub Release 安装）：
 
 1. 先确认 `Obsidian to Publish` 已经在 Obsidian 里启用。
 2. 在 Obsidian 打开「设置 → Obsidian to Publish → Chrome 插件连接」。
 3. 打开「启用本地连接」。
 4. 复制连接令牌，确认本地端口。
-5. 在 Chrome 打开 `chrome://extensions`。
-6. 打开「开发者模式」。
-7. 点击「加载已解压的扩展程序」，选择本项目里的 `chrome-companion/` 目录。
-8. 打开扩展选项页，填入端口和连接令牌并保存。Substack 用户可以额外填写自己的后台地址，例如 `https://nextcaicai.substack.com/publish/home`；也可以先打开一次自己的 Substack 后台首页，让扩展自动识别。
-9. 回到 Obsidian，打开要发布的笔记，选择目标平台，运行发送到 Chrome 插件的命令。
-10. Chrome 插件会打开目标平台编辑器并尝试填入内容；如果自动填入失败，可以用扩展面板里的复制按钮回退。
+5. 打开本项目最新 [GitHub Release](https://github.com/nextcaicai/obsidian-to-publish/releases)，下载 `obsidian-to-publish-companion-<version>.zip`（版本号与 Obsidian 插件相同）。
+6. 解压 zip，得到 `obsidian-to-publish-companion` 目录。
+7. 在 Chrome 打开 `chrome://extensions`，打开「开发者模式」。
+8. 点击「加载已解压的扩展程序」，选择刚解压出的 `obsidian-to-publish-companion` 目录。
+9. 打开扩展选项页，填入端口和连接令牌并保存。Substack 用户可以额外填写自己的后台地址，例如 `https://nextcaicai.substack.com/publish/home`；也可以先打开一次自己的 Substack 后台首页，让扩展自动识别。
+10. 回到 Obsidian，打开要发布的笔记，选择目标平台，运行发送到 Chrome 插件的命令。
+11. Chrome 插件会打开目标平台编辑器并尝试填入内容；如果自动填入失败，可以用扩展面板里的复制按钮回退。
+
+如果你在改源码或本地开发，也可以直接加载仓库里的 `chrome-companion/` 目录，效果相同。
 
 Chrome 插件的详细说明见 [chrome-companion/README.md](chrome-companion/README.md)。
 

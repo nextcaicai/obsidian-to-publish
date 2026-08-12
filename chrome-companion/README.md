@@ -18,16 +18,22 @@
 
 ## 安装与配对
 
+### 推荐：从 GitHub Release 安装
+
 1. 先在 Obsidian 中安装并启用 `Obsidian to Publish`。
 2. 打开「设置 → Obsidian to Publish → Chrome 插件连接」。
 3. 打开「启用本地连接」。
 4. 复制 Obsidian 生成的连接令牌，并确认本地端口。
-5. 在 Chrome 打开 `chrome://extensions`。
-6. 打开右上角「开发者模式」。
-7. 点击「加载已解压的扩展程序」。
-8. 选择本项目里的 `chrome-companion/` 目录。
+5. 打开最新 [GitHub Release](https://github.com/nextcaicai/obsidian-to-publish/releases)，下载 `obsidian-to-publish-companion-<version>.zip`（版本号与 Obsidian 插件相同）。
+6. 解压得到 `obsidian-to-publish-companion` 目录。
+7. 在 Chrome 打开 `chrome://extensions`，打开右上角「开发者模式」。
+8. 点击「加载已解压的扩展程序」，选择解压出的 `obsidian-to-publish-companion` 目录（不要选 zip 本身）。
 9. 打开扩展选项页，粘贴连接令牌，确认端口，然后保存。Substack 用户可以额外填写个人后台地址，或先打开一次自己的 Substack 后台首页让扩展自动识别。
 10. 回到 Obsidian，打开要同步的笔记，运行「发送当前笔记到 Chrome 插件」。
+
+### 本地开发
+
+直接在 Chrome 中「加载已解压的扩展程序」，选择本仓库的 `chrome-companion/` 目录即可。Release 打包时 companion 版本号与 Obsidian 插件同号。
 
 > [!NOTE]
 > 截图待补：这里建议放 3 张图：Obsidian 的 Chrome 插件连接设置、Chrome 扩展加载页、扩展选项页。

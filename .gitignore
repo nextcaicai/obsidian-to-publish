@@ -8,6 +8,7 @@ npm-debug.log*
 yarn-error.log*
 coverage/
 .vitest/
+dist/
 
 # Secrets and local plugin data
 # data.json is where Obsidian stores AppSecret / bridge token if copied from a vault.
