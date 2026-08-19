@@ -24,6 +24,13 @@ import {
 	normalizeImageLink
 } from "./rendering/image-links";
 import {
+	PREVIEW_REFRESH_DEBOUNCE_MS,
+	replacePreviewFragment,
+	shouldReplacePreviewFragment,
+	shouldSkipPreviewRender,
+	type PreviewRenderKey
+} from "./rendering/preview-refresh";
+import {
 	applyPlatformProfile,
 	isCopyPlatform,
 	PLATFORM_PICKER_LIST,
@@ -208,6 +215,7 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 	settings: WeChatPreviewCopySettings = DEFAULT_SETTINGS;
 	private chromeCompanionBridge: ChromeCompanionBridgeService | null = null;
 	private lastMarkdownFile: TFile | null = null;
+	private refreshForce = false;
 	private refreshTimer: number | null = null;
 
 	async onload() {
@@ -353,8 +361,12 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 			}
 		}));
 		this.registerEvent(this.app.metadataCache.on("changed", (file) => {
-			if (file.extension === "md" || isImageFile(file)) {
+			if (file.extension === "md") {
 				this.scheduleRefresh();
+				return;
+			}
+			if (isImageFile(file)) {
+				this.scheduleRefresh({ force: true });
 			}
 		}));
 		this.registerEditorChangeEvent();
@@ -619,7 +631,7 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		const renders: Promise<void>[] = [];
 		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_WECHAT_PREVIEW)) {
 			if (leaf.view instanceof WeChatPreviewCopyView) {
-				renders.push(leaf.view.renderActiveFile());
+				renders.push(leaf.view.renderActiveFile({ force: true }));
 			}
 		}
 		await Promise.all(renders);
@@ -892,19 +904,25 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 		return leaf;
 	}
 
-	private scheduleRefresh() {
+	private scheduleRefresh(options: { force?: boolean } = {}) {
+		if (options.force) {
+			this.refreshForce = true;
+		}
+
 		if (this.refreshTimer !== null) {
 			window.clearTimeout(this.refreshTimer);
 		}
 
 		this.refreshTimer = window.setTimeout(() => {
+			const force = this.refreshForce;
+			this.refreshForce = false;
 			this.refreshTimer = null;
 			for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_WECHAT_PREVIEW)) {
 				if (leaf.view instanceof WeChatPreviewCopyView) {
-					void leaf.view.renderActiveFile();
+					void leaf.view.renderActiveFile({ force });
 				}
 			}
-		}, 150);
+		}, PREVIEW_REFRESH_DEBOUNCE_MS);
 	}
 
 	private registerEditorChangeEvent() {
@@ -929,7 +947,10 @@ class WeChatPreviewCopyView extends ItemView {
 	private platformMenuOpen = false;
 	private previewEl!: HTMLElement;
 	private renderComponent: Component | null = null;
+	private renderRequestId = 0;
 	private renderSerial = 0;
+	private renderedFragment = "";
+	private renderedPreviewKey: PreviewRenderKey | null = null;
 	private sourceEl!: HTMLElement;
 	private documentClickHandler: ((event: MouseEvent) => void) | null = null;
 	private windowRepositionHandler: (() => void) | null = null;
@@ -975,13 +996,15 @@ class WeChatPreviewCopyView extends ItemView {
 
 		const refreshButton = toolbarEl.createEl("button", { text: "刷新" });
 		refreshButton.addEventListener("click", () => {
-			void this.renderActiveFile();
+			void this.renderActiveFile({ force: true });
 		});
 
 		this.previewEl = this.contentEl.createDiv({ cls: "obsidian-to-publish-content" });
 		this.sourceEl = this.contentEl.createDiv({
 			cls: "obsidian-to-publish-source markdown-rendered"
 		});
+		this.renderedFragment = "";
+		this.renderedPreviewKey = null;
 		this.syncPlatformControls();
 
 		await this.renderActiveFile();
@@ -1156,36 +1179,44 @@ class WeChatPreviewCopyView extends ItemView {
 		this.closePlatformMenu();
 		this.renderComponent?.unload();
 		this.renderComponent = null;
+		this.renderedFragment = "";
+		this.renderedPreviewKey = null;
 	}
 
-	async renderActiveFile() {
-		const serial = ++this.renderSerial;
+	async renderActiveFile(options: { force?: boolean } = {}) {
+		const requestId = ++this.renderRequestId;
 		const file = this.plugin.getActiveMarkdownFile();
-		this.currentFile = file;
-		this.currentMarkdown = "";
-		this.currentUnresolvedImages = 0;
-
-		this.renderComponent?.unload();
-		this.renderComponent = null;
-		this.previewEl.empty();
-		this.sourceEl.empty();
 
 		if (!file) {
-			this.previewEl.createDiv({
-				cls: "obsidian-to-publish-empty",
-				text: "打开一篇 Markdown 笔记后在这里预览。"
-			});
+			if (requestId !== this.renderRequestId) {
+				return;
+			}
+			this.commitEmptyPreview(options);
 			return;
 		}
 
 		const markdown = await this.plugin.getMarkdownForFile(file);
-		if (serial !== this.renderSerial) {
+		if (requestId !== this.renderRequestId) {
 			return;
 		}
 
-		this.currentMarkdown = this.removeRedundantImageAttachmentLinkLines(markdown);
+		const nextMarkdown = this.removeRedundantImageAttachmentLinkLines(markdown);
+		const nextKey = this.createPreviewRenderKey(file.path, nextMarkdown);
+		if (shouldSkipPreviewRender(this.renderedPreviewKey, nextKey, options)) {
+			this.currentFile = file;
+			this.currentMarkdown = nextMarkdown;
+			return;
+		}
+
+		const serial = ++this.renderSerial;
+		this.currentFile = file;
+		this.currentMarkdown = nextMarkdown;
+		this.currentUnresolvedImages = 0;
+
+		this.renderComponent?.unload();
 		this.renderComponent = new Component();
 		this.renderComponent.load();
+		this.sourceEl.empty();
 
 		await MarkdownRenderer.render(
 			this.app,
@@ -1194,6 +1225,10 @@ class WeChatPreviewCopyView extends ItemView {
 			file.path,
 			this.renderComponent
 		);
+		if (serial !== this.renderSerial) {
+			return;
+		}
+
 		this.removeRenderedRuntimeControls(this.sourceEl, serial);
 
 		const preview = await this.buildPlatformFragment();
@@ -1202,8 +1237,45 @@ class WeChatPreviewCopyView extends ItemView {
 		}
 
 		this.currentUnresolvedImages = preview.unresolvedImages;
-		this.previewEl.innerHTML = preview.fragment;
+		if (shouldReplacePreviewFragment(this.renderedFragment, preview.fragment)) {
+			replacePreviewFragment(this.previewEl, preview.fragment);
+		}
+		this.renderedFragment = preview.fragment;
+		this.renderedPreviewKey = nextKey;
 		this.updateStatus(file, preview.unresolvedImages);
+	}
+
+	private createPreviewRenderKey(filePath: string | null, markdown: string): PreviewRenderKey {
+		return {
+			filePath,
+			markdown,
+			platform: this.plugin.settings.targetPlatform,
+			inlineStyles: this.plugin.settings.inlineStyles,
+			embedLocalImages: this.plugin.settings.embedLocalImages
+		};
+	}
+
+	private commitEmptyPreview(options: { force?: boolean } = {}) {
+		const nextKey = this.createPreviewRenderKey(null, "");
+		this.currentFile = null;
+		this.currentMarkdown = "";
+		this.currentUnresolvedImages = 0;
+
+		if (shouldSkipPreviewRender(this.renderedPreviewKey, nextKey, options)) {
+			return;
+		}
+
+		this.renderSerial += 1;
+		this.renderComponent?.unload();
+		this.renderComponent = null;
+		this.sourceEl.empty();
+		this.previewEl.empty();
+		this.previewEl.createDiv({
+			cls: "obsidian-to-publish-empty",
+			text: "打开一篇 Markdown 笔记后在这里预览。"
+		});
+		this.renderedFragment = "";
+		this.renderedPreviewKey = nextKey;
 	}
 
 	async copyForCurrentPlatform(options: {
