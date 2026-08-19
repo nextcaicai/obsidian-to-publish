@@ -70,6 +70,7 @@
 		{
 			"resources": [
 				"src/page-editor-order.js",
+				"src/page-x-markdown.js",
 				"src/page-x-upload.js"
 			],
 			"matches": [

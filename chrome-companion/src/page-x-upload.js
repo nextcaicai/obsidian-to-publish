@@ -260,10 +260,13 @@
 		const CharacterList = sample.block.getCharacterList().constructor;
 		let nextBlockMap = BlockMap();
 		let lastKey = "";
-		const lines = String(markdown || "").split(/\r?\n/);
+		const blocks = globalThis.OTPXMarkdown?.markdownToDraftBlocks?.(markdown);
+		if (!Array.isArray(blocks) || blocks.length === 0) {
+			return { ok: false, error: "X Markdown formatter was not reachable." };
+		}
 
-		for (let index = 0; index < Math.max(1, lines.length); index += 1) {
-			const text = lines[index] || "";
+		for (let index = 0; index < blocks.length; index += 1) {
+			const { text, type } = blocks[index];
 			const key = `${Math.random().toString(36).slice(2, 7)}${index.toString(36)}`;
 			let characterList = CharacterList();
 			const emptyStyle = sample.character.getStyle().clear();
@@ -272,7 +275,7 @@
 			}
 			const block = sample.block.merge({
 				key,
-				type: "unstyled",
+				type,
 				text,
 				characterList,
 				depth: 0,
