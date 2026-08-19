@@ -341,12 +341,15 @@
 			const beforeImageCount = countEditorImages(target);
 			let uploadStarted = false;
 			if (adapter.uploadImagesViaFileInput) {
+				const markerBlock = findMarkerBlock(target, image.marker);
 				uploadStarted = await runMarkerFileUploadSequence({
 					removeMarker: () => replaceTextInWritable(target, image.marker, ""),
-					settleSelection: async () => {
-						await delay(adapter.markerSelectionSettleMs ?? 120);
-						target.focus();
-					},
+					settleSelection: () => waitForMarkerSelectionToSettle(
+						target,
+						markerBlock,
+						image.marker,
+						adapter
+					),
 					uploadImage: () => uploadImageViaFileInput(file, adapter)
 				});
 			} else {
@@ -372,19 +375,22 @@
 				await removeRestoredMarkerAfterUpload({
 					hasMarker: () => getWritableText(target).includes(image.marker),
 					removeMarker: () => replaceTextInWritable(target, image.marker, ""),
-					settle: () => delay(adapter.markerCleanupSettleMs ?? 160)
+					settle: () => delay(adapter.markerCleanupSettleMs ?? 160),
+					retries: adapter.markerCleanupRetries ?? 2
 				});
 			} else {
 				failed += 1;
-				insertIntoWritableElement(target, {
-					text: `[图片上传失败：${image.alt}]`,
-					html: "",
-					files: []
-				}, {
-					allowHtml: false,
-					preferPaste: false,
-					replaceExisting: false
-				});
+				if (!adapter.uploadImagesViaFileInput) {
+					insertIntoWritableElement(target, {
+						text: `[图片上传失败：${image.alt}]`,
+						html: "",
+						files: []
+					}, {
+						allowHtml: false,
+						preferPaste: false,
+						replaceExisting: false
+					});
+				}
 			}
 			await delay(adapter.filePasteDelayMs ?? 900);
 		}
@@ -404,15 +410,56 @@
 			return false;
 		}
 
-		await settleSelection();
+		if (!await settleSelection()) {
+			return false;
+		}
 		return uploadImage();
 	}
 
-	async function removeRestoredMarkerAfterUpload({ hasMarker, removeMarker, settle }) {
-		if (hasMarker()) {
-			removeMarker();
+	async function removeRestoredMarkerAfterUpload({ hasMarker, removeMarker, settle, retries = 1 }) {
+		const attempts = Math.max(1, Number(retries) + 1);
+		for (let attempt = 0; attempt < attempts; attempt += 1) {
+			await settle();
+			if (!hasMarker()) {
+				return true;
+			}
+			if (!removeMarker()) {
+				return false;
+			}
 		}
+
+		await settle();
 		return !hasMarker();
+	}
+
+	async function waitForMarkerSelectionToSettle(target, markerBlock, marker, adapter) {
+		if (!markerBlock) {
+			return false;
+		}
+
+		await delay(adapter.markerSelectionSettleMs ?? 120);
+		target.focus();
+
+		const timeoutMs = adapter.markerSelectionCommitWaitMs ?? 1200;
+		const pollMs = adapter.markerSelectionPollMs ?? 40;
+		const stableMs = adapter.markerSelectionStableMs ?? 80;
+		const startedAt = Date.now();
+		let stableAt = 0;
+		while (Date.now() - startedAt < timeoutMs) {
+			const markerRemoved = !getWritableText(target).includes(marker);
+			const selectionSettled = markerRemoved && isSelectionInsideElement(markerBlock);
+			if (selectionSettled) {
+				stableAt = stableAt || Date.now();
+				if (Date.now() - stableAt >= stableMs) {
+					return true;
+				}
+			} else {
+				stableAt = 0;
+			}
+			await delay(pollMs);
+		}
+
+		return false;
 	}
 
 	function getPlainTextFromHtml(html) {
@@ -1628,6 +1675,27 @@
 		selection.removeAllRanges();
 		selection.addRange(range);
 		return true;
+	}
+
+	function findMarkerBlock(target, marker) {
+		const range = findTextRange(target, marker);
+		if (!range?.startContainer) {
+			return null;
+		}
+
+		const parent = range.startContainer.parentElement;
+		return parent?.closest?.("[data-block='true']") || null;
+	}
+
+	function isSelectionInsideElement(element) {
+		if (!element?.isConnected) {
+			return false;
+		}
+
+		const selection = window.getSelection();
+		return selection?.rangeCount > 0
+			&& element.contains(selection.anchorNode)
+			&& element.contains(selection.focusNode);
 	}
 
 	function removeMarkerText(target, marker) {

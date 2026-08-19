@@ -17,7 +17,11 @@
 		markerWaitMs: 10000,
 		markerPollMs: 300,
 		markerCleanupSettleMs: 160,
+		markerCleanupRetries: 2,
 		markerSelectionSettleMs: 120,
+		markerSelectionCommitWaitMs: 1200,
+		markerSelectionPollMs: 40,
+		markerSelectionStableMs: 80,
 		titleSelectors: [
 			"textarea[placeholder*='标题']",
 			"input[placeholder*='标题']",

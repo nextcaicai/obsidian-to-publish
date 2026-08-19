@@ -18,7 +18,7 @@ describe("Chrome companion marker image positioning", () => {
 			OTPCompanion?: {
 				runMarkerFileUploadSequence(options: {
 					removeMarker(): boolean;
-					settleSelection(): Promise<void>;
+					settleSelection(): Promise<boolean>;
 					uploadImage(): Promise<string>;
 				}): Promise<string | false>;
 			};
@@ -33,7 +33,7 @@ describe("Chrome companion marker image positioning", () => {
 				return true;
 			},
 			settleSelection() {
-				return new Promise((resolve) => setTimeout(resolve, 0));
+				return new Promise((resolve) => setTimeout(() => resolve(true), 0));
 			},
 			async uploadImage() {
 				return editorSelection;
@@ -41,6 +41,33 @@ describe("Chrome companion marker image positioning", () => {
 		});
 
 		expect(uploadPosition).toBe("marker");
+	});
+
+	it("does not start a file upload until the marker selection is confirmed", async () => {
+		delete require.cache[contentSharedPath];
+		require(contentSharedPath);
+		const companion = (globalThis as {
+			OTPCompanion?: {
+				runMarkerFileUploadSequence(options: {
+					removeMarker(): boolean;
+					settleSelection(): Promise<boolean>;
+					uploadImage(): Promise<string>;
+				}): Promise<string | false>;
+			};
+		}).OTPCompanion;
+		let uploadStarted = false;
+
+		const uploadPosition = await companion?.runMarkerFileUploadSequence({
+			removeMarker: () => true,
+			settleSelection: async () => false,
+			uploadImage: async () => {
+				uploadStarted = true;
+				return "marker";
+			}
+		});
+
+		expect(uploadPosition).toBe(false);
+		expect(uploadStarted).toBe(false);
 	});
 
 	it("removes a marker restored asynchronously after image upload", async () => {
@@ -56,9 +83,7 @@ describe("Chrome companion marker image positioning", () => {
 			};
 		}).OTPCompanion;
 		let markerPresent = false;
-		setTimeout(() => {
-			markerPresent = true;
-		}, 0);
+		let settled = false;
 
 		const cleaned = await companion?.removeRestoredMarkerAfterUpload({
 			hasMarker: () => markerPresent,
@@ -66,8 +91,11 @@ describe("Chrome companion marker image positioning", () => {
 				markerPresent = false;
 				return true;
 			},
-			settle() {
-				return new Promise((resolve) => setTimeout(resolve, 0));
+			async settle() {
+				if (!settled) {
+					settled = true;
+					markerPresent = true;
+				}
 			}
 		});
 
