@@ -11,6 +11,8 @@ const TASK_KEY_PREFIX = "task:";
 const TASK_DELIVER_RETRY_LIMIT = 40;
 const TASK_DELIVER_RETRY_MS = 500;
 const TASK_CACHE_TTL_MS = 30 * 60 * 1000;
+const TASK_LIFECYCLE_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_CONCURRENT_PLATFORM_TASKS = 2;
 const SUBSTACK_ARTICLE_PATH = "/publish/post?type=newsletter";
 
 const SUPPORTED_PLATFORMS = [
@@ -30,11 +32,20 @@ const tasksByTabId = new Map();
 const tasksByPlatformMemory = new Map();
 /** @type {Map<number, number>} */
 const deliverTimersByTabId = new Map();
+/** @type {Map<string, object>} */
+const tasksById = new Map();
+/** @type {Map<string, string[]>} */
+const queuedTaskIdsByPlatform = new Map();
+/** @type {string[]} */
+const readyPlatformQueue = [];
+/** @type {Map<string, string>} */
+const activeTaskIdByPlatform = new Map();
+/** @type {Map<string, number>} */
+const lifecycleTimersByTaskId = new Map();
 
 let bridgeSocket = null;
 let heartbeatTimer = null;
 let reconnectTimer = null;
-let importDraftQueue = Promise.resolve();
 let connectionState = {
 	connected: false,
 	connecting: false,
@@ -66,9 +77,17 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-	tasksByTabId.delete(tabId);
-	clearDeliverTimer(tabId);
+	void handleTabRemoved(tabId);
 });
+
+async function handleTabRemoved(tabId) {
+	const task = tasksByTabId.get(tabId);
+	if (task) {
+		await settleTask(task.id, { status: "failed", reason: "tab_closed" });
+		return;
+	}
+	clearDeliverTimer(tabId);
+}
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 	if (changeInfo.status !== "complete" && !changeInfo.url) {
@@ -109,8 +128,21 @@ async function handleRuntimeMessage(message, sender) {
 	if (message.type === "task.clearLatest") {
 		const platform = typeof message.platform === "string" ? message.platform.trim() : "";
 		const tabId = typeof sender?.tab?.id === "number" ? sender.tab.id : null;
+		const taskId = typeof message.taskId === "string" ? message.taskId.trim() : "";
+		if (taskId) {
+			return handleTaskResult({
+				taskId,
+				platform,
+				status: "cancelled",
+				reason: "dismissed"
+			}, sender);
+		}
 		await clearTask({ platform, tabId });
 		return { ok: true };
+	}
+
+	if (message.type === "task.result") {
+		return handleTaskResult(message, sender);
 	}
 
 	if (message.type === "task.clearAll") {
@@ -340,10 +372,7 @@ async function handleBridgeMessage(rawMessage) {
 }
 
 function enqueueImportDraft(params) {
-	const run = importDraftQueue.then(() => importDraft(params));
-	// Keep the queue alive even when one import fails.
-	importDraftQueue = run.then(() => undefined, () => undefined);
-	return run;
+	return importDraft(params);
 }
 
 async function importDraft(params) {
@@ -351,44 +380,274 @@ async function importDraft(params) {
 	if (!publishPackage || publishPackage.source !== "obsidian-to-publish" || publishPackage.version !== 1) {
 		throw new Error("Invalid publish package.");
 	}
-
+	const taskId = typeof publishPackage.requestId === "string" ? publishPackage.requestId.trim() : "";
+	if (!taskId) {
+		throw new Error("Invalid publish package requestId.");
+	}
 	await clearExpiredTasks();
+	if (tasksById.has(taskId)) {
+		throw new Error(`Duplicate active taskId: ${taskId}`);
+	}
 
 	const platform = await resolveTargetPlatform(publishPackage);
 	const createdAtMs = Date.now();
 	const task = {
-		id: publishPackage.requestId,
+		id: taskId,
 		platform: platform.id,
+		editorUrl: platform.editorUrl,
 		createdAt: new Date(createdAtMs).toISOString(),
 		expiresAt: new Date(createdAtMs + TASK_CACHE_TTL_MS).toISOString(),
-		package: publishPackage
+		package: publishPackage,
+		status: "queued",
+		tabId: null
 	};
 
-	tasksByPlatformMemory.set(platform.id, task);
-	await persistPlatformTask(platform.id, task);
-
-	const tab = await chrome.tabs.create({
-		url: platform.editorUrl,
-		// Keep previously opened multi-select tabs alive without stealing focus each time.
-		active: true
-	});
-	if (typeof tab.id === "number") {
-		tasksByTabId.set(tab.id, task);
-		void deliverTaskToTab(tab.id);
-	}
-	if (typeof tab.windowId === "number") {
-		await chrome.windows.update(tab.windowId, {
-			focused: true
-		});
-	}
+	tasksById.set(task.id, task);
+	queueTask(task);
+	void drainTaskQueue();
 
 	return {
 		accepted: true,
 		taskId: task.id,
 		platform: platform.id,
 		editorUrl: platform.editorUrl,
-		tabId: typeof tab.id === "number" ? tab.id : null
+		tabId: null,
+		status: task.status
 	};
+}
+
+function queueTask(task) {
+	const queue = queuedTaskIdsByPlatform.get(task.platform) || [];
+	const wasEmpty = queue.length === 0;
+	queue.push(task.id);
+	queuedTaskIdsByPlatform.set(task.platform, queue);
+
+	if (wasEmpty && !activeTaskIdByPlatform.has(task.platform)) {
+		readyPlatformQueue.push(task.platform);
+	}
+}
+
+async function drainTaskQueue() {
+	while (activeTaskIdByPlatform.size < MAX_CONCURRENT_PLATFORM_TASKS) {
+		const nextTask = dequeueNextRunnableTask();
+		if (!nextTask) {
+			return;
+		}
+		startTask(nextTask);
+	}
+}
+
+function dequeueNextRunnableTask() {
+	while (readyPlatformQueue.length > 0) {
+		const platform = readyPlatformQueue.shift();
+		if (!platform || activeTaskIdByPlatform.has(platform)) {
+			continue;
+		}
+
+		const queue = queuedTaskIdsByPlatform.get(platform) || [];
+		const taskId = queue.shift();
+		if (queue.length > 0) {
+			queuedTaskIdsByPlatform.set(platform, queue);
+		} else {
+			queuedTaskIdsByPlatform.delete(platform);
+		}
+
+		const task = taskId ? tasksById.get(taskId) : null;
+		if (task?.status === "queued") {
+			return task;
+		}
+	}
+
+	return null;
+}
+
+function startTask(task) {
+	if (!task || task.status !== "queued" || activeTaskIdByPlatform.has(task.platform)) {
+		return;
+	}
+
+	task.status = "starting";
+	activeTaskIdByPlatform.set(task.platform, task.id);
+	void openTaskEditor(task);
+}
+
+async function openTaskEditor(task) {
+	try {
+		const tab = await chrome.tabs.create({
+			url: task.editorUrl || (SUPPORTED_PLATFORMS.find((item) => item.id === task.platform)?.editorUrl || ""),
+			// Keep the existing draft-opening behavior. Focus arbitration is deliberately
+			// separate from the task scheduler so it cannot serialize lifecycle completion.
+			active: true
+		});
+		if (typeof tab.id !== "number") {
+			throw new Error("editor_tab_not_created");
+		}
+
+		if (!isCurrentActiveTask(task)) {
+			return;
+		}
+
+		task.tabId = tab.id;
+		task.status = "persisting";
+		tasksByTabId.set(tab.id, task);
+		tasksByPlatformMemory.set(task.platform, task);
+		await persistPlatformTask(task.platform, task);
+		if (!isCurrentActiveTask(task)) {
+			try {
+				await clearPersistedTask(task);
+			} catch (error) {
+				console.warn("Failed to clear a stale persisted task after it settled.", error);
+			}
+			return;
+		}
+		task.status = "running";
+		startLifecycleTimer(task);
+		void deliverTaskToTab(tab.id, task.id).then((delivered) => {
+			if (!delivered) {
+				void settleTask(task.id, { status: "failed", reason: "delivery_timeout" });
+			}
+		});
+	} catch (error) {
+		void settleTask(task.id, {
+			status: "failed",
+			reason: error instanceof Error ? error.message : String(error)
+		});
+	}
+}
+
+function startLifecycleTimer(task) {
+	clearLifecycleTimer(task.id);
+	const timer = setTimeout(() => {
+		void settleTask(task.id, { status: "failed", reason: "lifecycle_timeout" });
+	}, TASK_LIFECYCLE_TIMEOUT_MS);
+	lifecycleTimersByTaskId.set(task.id, timer);
+}
+
+function clearLifecycleTimer(taskId) {
+	const timer = lifecycleTimersByTaskId.get(taskId);
+	if (timer) {
+		clearTimeout(timer);
+		lifecycleTimersByTaskId.delete(taskId);
+	}
+}
+
+async function handleTaskResult(message, sender) {
+	const taskId = typeof message?.taskId === "string" ? message.taskId.trim() : "";
+	const platform = typeof message?.platform === "string" ? message.platform.trim() : "";
+	const tabId = typeof sender?.tab?.id === "number" ? sender.tab.id : null;
+	if (!taskId || !platform || tabId === null) {
+		return { ok: false, error: "invalid_task_result" };
+	}
+
+	const task = tasksById.get(taskId);
+	if (!task || !isMatchingTaskIdentity(task, { taskId, platform, tabId })) {
+		return { ok: false, error: "task_identity_mismatch" };
+	}
+
+	await settleTask(taskId, {
+		status: normalizeTaskResultStatus(message.status),
+		reason: typeof message.reason === "string" ? message.reason : ""
+	});
+	return { ok: true };
+}
+
+function normalizeTaskResultStatus(status) {
+	return status === "succeeded" || status === "completed" ? "succeeded" : "failed";
+}
+
+function isMatchingTaskIdentity(task, { taskId, platform, tabId }) {
+	return task?.id === taskId
+		&& task.platform === platform
+		&& task.tabId === tabId
+		&& tasksByTabId.get(tabId)?.id === taskId
+		&& activeTaskIdByPlatform.get(platform) === taskId;
+}
+
+function isCurrentActiveTask(task) {
+	return task?.id
+		&& activeTaskIdByPlatform.get(task.platform) === task.id
+		&& tasksById.get(task.id) === task;
+}
+
+async function settleTask(taskId, { status = "failed", reason = "" } = {}) {
+	const task = tasksById.get(taskId);
+	if (!task || task.status === "settled") {
+		return false;
+	}
+
+	task.status = "settled";
+	task.completedAt = new Date().toISOString();
+	task.result = { status, reason };
+	clearLifecycleTimer(task.id);
+
+	if (typeof task.tabId === "number" && tasksByTabId.get(task.tabId)?.id === task.id) {
+		tasksByTabId.delete(task.tabId);
+		clearDeliverTimer(task.tabId);
+	}
+	if (tasksByPlatformMemory.get(task.platform)?.id === task.id) {
+		tasksByPlatformMemory.delete(task.platform);
+	}
+	if (activeTaskIdByPlatform.get(task.platform) === task.id) {
+		activeTaskIdByPlatform.delete(task.platform);
+	}
+	removeQueuedTaskId(task.platform, task.id);
+	tasksById.delete(task.id);
+
+	try {
+		await clearPersistedTask(task);
+	} catch (error) {
+		console.warn("Failed to clear a settled task from local storage.", error);
+	} finally {
+		if (queuedTaskIdsByPlatform.has(task.platform) && !activeTaskIdByPlatform.has(task.platform)) {
+			readyPlatformQueue.push(task.platform);
+		}
+		void drainTaskQueue();
+	}
+	return true;
+}
+
+function removeQueuedTaskId(platform, taskId) {
+	const queue = queuedTaskIdsByPlatform.get(platform);
+	if (!queue) {
+		return;
+	}
+	const nextQueue = queue.filter((queuedTaskId) => queuedTaskId !== taskId);
+	if (nextQueue.length > 0) {
+		queuedTaskIdsByPlatform.set(platform, nextQueue);
+	} else {
+		queuedTaskIdsByPlatform.delete(platform);
+	}
+}
+
+async function clearPersistedTask(task) {
+	const platformKey = getPlatformTaskKey(task.platform);
+	const stored = await chrome.storage.local.get({
+		[platformKey]: null,
+		[STORAGE_KEYS.latestTask]: null,
+		[STORAGE_KEYS.tasksByPlatform]: {}
+	});
+	const updates = {};
+	const keysToRemove = [];
+	if (stored[platformKey]?.id === task.id) {
+		keysToRemove.push(platformKey);
+	}
+	if (stored[STORAGE_KEYS.latestTask]?.id === task.id) {
+		updates[STORAGE_KEYS.latestTask] = null;
+	}
+	const legacyTasks = isPlainObject(stored[STORAGE_KEYS.tasksByPlatform])
+		? { ...stored[STORAGE_KEYS.tasksByPlatform] }
+		: {};
+	if (legacyTasks[task.platform]?.id === task.id) {
+		delete legacyTasks[task.platform];
+		updates[STORAGE_KEYS.tasksByPlatform] = legacyTasks;
+	}
+
+	if (Object.keys(updates).length > 0) {
+		await chrome.storage.local.set(updates);
+	}
+	if (keysToRemove.length > 0) {
+		await chrome.storage.local.remove(keysToRemove);
+	}
 }
 
 async function persistPlatformTask(platformId, task) {
@@ -485,6 +744,16 @@ async function resolveTaskForRequest(platform, tabId) {
 }
 
 async function clearExpiredTasks() {
+	const expiredTaskIds = [];
+	for (const task of tasksById.values()) {
+		if (isTaskExpired(task)) {
+			expiredTaskIds.push(task.id);
+		}
+	}
+	for (const taskId of expiredTaskIds) {
+		await settleTask(taskId, { status: "failed", reason: "cache_expired" });
+	}
+
 	const expiredPlatforms = new Set();
 	for (const [tabId, task] of tasksByTabId.entries()) {
 		if (!isTaskExpired(task)) {
@@ -586,6 +855,10 @@ async function readPlatformTask(platform) {
 async function clearTask({ platform = "", tabId = null } = {}) {
 	if (typeof tabId === "number") {
 		const tabTask = tasksByTabId.get(tabId);
+		if (tabTask?.id && isCurrentActiveTask(tabTask)) {
+			await settleTask(tabTask.id, { status: "failed", reason: "cleared" });
+			return;
+		}
 		tasksByTabId.delete(tabId);
 		clearDeliverTimer(tabId);
 		if (!platform && tabTask?.platform) {
@@ -596,14 +869,27 @@ async function clearTask({ platform = "", tabId = null } = {}) {
 	if (!platform) {
 		tasksByTabId.clear();
 		tasksByPlatformMemory.clear();
+		tasksById.clear();
+		queuedTaskIdsByPlatform.clear();
+		readyPlatformQueue.length = 0;
+		activeTaskIdByPlatform.clear();
 		for (const timerTabId of deliverTimersByTabId.keys()) {
 			clearDeliverTimer(timerTabId);
+		}
+		for (const taskId of lifecycleTimersByTaskId.keys()) {
+			clearLifecycleTimer(taskId);
 		}
 		const keysToRemove = [STORAGE_KEYS.latestTask, STORAGE_KEYS.tasksByPlatform];
 		for (const item of SUPPORTED_PLATFORMS) {
 			keysToRemove.push(getPlatformTaskKey(item.id));
 		}
 		await chrome.storage.local.remove(keysToRemove);
+		return;
+	}
+
+	const activeTaskId = activeTaskIdByPlatform.get(platform);
+	if (activeTaskId) {
+		await settleTask(activeTaskId, { status: "failed", reason: "cleared" });
 		return;
 	}
 
@@ -638,16 +924,16 @@ async function clearTask({ platform = "", tabId = null } = {}) {
 	await chrome.storage.local.remove(patchRemove);
 }
 
-async function deliverTaskToTab(tabId) {
+async function deliverTaskToTab(tabId, expectedTaskId = "") {
 	const task = tasksByTabId.get(tabId);
-	if (!task) {
+	if (!task || task.status !== "running" || (expectedTaskId && task.id !== expectedTaskId) || !isCurrentActiveTask(task)) {
 		return false;
 	}
 
 	clearDeliverTimer(tabId);
 
 	for (let attempt = 0; attempt < TASK_DELIVER_RETRY_LIMIT; attempt += 1) {
-		if (!tasksByTabId.has(tabId)) {
+		if (tasksByTabId.get(tabId)?.id !== task.id || task.status !== "running" || !isCurrentActiveTask(task)) {
 			return false;
 		}
 
@@ -829,7 +1115,22 @@ if (globalThis.__OTP_COMPANION_BACKGROUND_TEST__ === true) {
 		clearTask,
 		closeBridge,
 		connectBridge,
+		drainTaskQueue,
 		getConnectionState: () => ({ ...connectionState }),
+		getSchedulerSnapshot: () => ({
+			activeTaskIdsByPlatform: Object.fromEntries(activeTaskIdByPlatform),
+			queuedTaskIdsByPlatform: Object.fromEntries(
+				[...queuedTaskIdsByPlatform.entries()].map(([platform, taskIds]) => [platform, [...taskIds]])
+			),
+			tasks: [...tasksById.values()].map((task) => ({
+				id: task.id,
+				platform: task.platform,
+				status: task.status,
+				tabId: task.tabId
+			}))
+		}),
+		handleTabRemoved,
+		handleTaskResult,
 		importDraft,
 		isTaskExpired,
 		normalizeSubstackEditorUrl,

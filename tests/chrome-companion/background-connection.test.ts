@@ -126,10 +126,14 @@ describe("Chrome companion background connection", () => {
 		delete require.cache[backgroundPath];
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		const api = (globalThis as {
-			OTPCompanionBackground?: { closeBridge(): void };
+			OTPCompanionBackground?: {
+				clearTask(): Promise<void>;
+				closeBridge(): void;
+			};
 		}).OTPCompanionBackground;
+		await api?.clearTask();
 		api?.closeBridge();
 		delete (globalThis as Record<string, unknown>).OTPCompanionBackground;
 		delete (globalThis as Record<string, unknown>).__OTP_COMPANION_BACKGROUND_TEST__;

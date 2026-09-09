@@ -266,12 +266,18 @@
 		}
 
 		for (let index = 0; index < blocks.length; index += 1) {
-			const { text, type } = blocks[index];
+			const { text, type, inlineStyleRanges = [] } = blocks[index];
 			const key = `${Math.random().toString(36).slice(2, 7)}${index.toString(36)}`;
 			let characterList = CharacterList();
 			const emptyStyle = sample.character.getStyle().clear();
 			for (let charIndex = 0; charIndex < text.length; charIndex += 1) {
-				characterList = characterList.push(sample.character.set("style", emptyStyle).set("entity", null));
+				let style = emptyStyle;
+				for (const range of inlineStyleRanges) {
+					if (range.style === "BOLD" && charIndex >= range.offset && charIndex < range.offset + range.length) {
+						style = style.add("BOLD");
+					}
+				}
+				characterList = characterList.push(sample.character.set("style", style).set("entity", null));
 			}
 			const block = sample.block.merge({
 				key,

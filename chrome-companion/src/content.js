@@ -152,7 +152,8 @@ function renderPanel(task, adapter) {
 	closeButton.addEventListener("click", async () => {
 		await chrome.runtime.sendMessage({
 			type: "task.clearLatest",
-			platform: adapter.id
+			platform: adapter.id,
+			taskId: task.id
 		});
 		panel.remove();
 	});
@@ -193,32 +194,56 @@ function showInlineStatus(panel, text) {
 async function autoInsertDraft(task, adapter, panel) {
 	const companion = globalThis.OTPCompanion;
 	const sessionKey = `obsidian-to-publish-inserted:${task.id}`;
-	if (sessionStorage.getItem(sessionKey) === "true") {
-		showInlineStatus(panel, "该草稿已在当前标签页尝试写入。");
-		return;
-	}
-
-	const startedAt = Date.now();
-	let titleAlreadyInserted = false;
-	while (Date.now() - startedAt < (adapter.autoInsertTimeoutMs ?? companion.AUTO_INSERT_TIMEOUT_MS)) {
-		const result = await companion.insertDraftWithAdapter(task, adapter, {
-			skipTitle: titleAlreadyInserted
-		});
-		titleAlreadyInserted = titleAlreadyInserted || result.titleInserted;
-		if (result.bodyInserted) {
-			sessionStorage.setItem(sessionKey, "true");
-			showInlineStatus(panel, getInsertResultMessage({
-				...result,
-				titleInserted: titleAlreadyInserted
-			}));
+	try {
+		if (sessionStorage.getItem(sessionKey) === "true") {
+			showInlineStatus(panel, "该草稿已在当前标签页尝试写入。");
+			await reportTaskResult(task, "succeeded", "already_inserted");
 			return;
 		}
 
-		showInlineStatus(panel, titleAlreadyInserted ? "已写入标题，等待正文编辑器加载..." : "等待编辑器加载...");
-		await companion.delay(companion.AUTO_INSERT_INTERVAL_MS);
-	}
+		const startedAt = Date.now();
+		let titleAlreadyInserted = false;
+		while (Date.now() - startedAt < (adapter.autoInsertTimeoutMs ?? companion.AUTO_INSERT_TIMEOUT_MS)) {
+			const result = await companion.insertDraftWithAdapter(task, adapter, {
+				skipTitle: titleAlreadyInserted
+			});
+			titleAlreadyInserted = titleAlreadyInserted || result.titleInserted;
+			if (result.bodyInserted) {
+				sessionStorage.setItem(sessionKey, "true");
+				showInlineStatus(panel, getInsertResultMessage({
+					...result,
+					titleInserted: titleAlreadyInserted
+				}));
+				await reportTaskResult(task, "succeeded", "body_inserted");
+				return;
+			}
 
-	showInlineStatus(panel, "未找到可写入的编辑区域，请点击正文编辑器后点“尝试填入”。");
+			showInlineStatus(panel, titleAlreadyInserted ? "已写入标题，等待正文编辑器加载..." : "等待编辑器加载...");
+			await companion.delay(companion.AUTO_INSERT_INTERVAL_MS);
+		}
+
+		showInlineStatus(panel, "未找到可写入的编辑区域，请点击正文编辑器后点“尝试填入”。");
+		await reportTaskResult(task, "failed", "editor_timeout");
+	} catch (error) {
+		console.error(error);
+		showInlineStatus(panel, "自动填入失败，请点击“尝试填入”重试。");
+		await reportTaskResult(task, "failed", error instanceof Error ? error.message : String(error));
+	}
+}
+
+async function reportTaskResult(task, status, reason) {
+	try {
+		await chrome.runtime.sendMessage({
+			type: "task.result",
+			taskId: task.id,
+			platform: task.platform,
+			status,
+			reason
+		});
+	} catch {
+		// The service worker can restart after the editor has already received a task.
+		// Its cache timeout remains the fallback release path in that case.
+	}
 }
 
 function getInsertResultMessage(result) {

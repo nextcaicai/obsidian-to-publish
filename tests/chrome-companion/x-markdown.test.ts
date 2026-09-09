@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
 const xMarkdownTools = require("../../chrome-companion/src/page-x-markdown.js") as {
-	markdownToDraftBlocks: (markdown: string) => Array<{ type: string; text: string }>;
+	markdownToDraftBlocks: (markdown: string) => Array<{
+		type: string;
+		text: string;
+		inlineStyleRanges?: Array<{ offset: number; length: number; style: string }>;
+	}>;
 };
 
 describe("X Chrome companion Markdown formatting", () => {
@@ -27,6 +31,19 @@ describe("X Chrome companion Markdown formatting", () => {
 			{ type: "unstyled", text: "开头" },
 			{ type: "unstyled", text: "[[OTP_IMAGE_asset_1_1]]" },
 			{ type: "unstyled", text: "结尾" }
+		]);
+	});
+
+	it("converts bold Markdown to Draft.js BOLD character ranges", () => {
+		expect(xMarkdownTools.markdownToDraftBlocks("正文 **需要加粗**，还有 __也需要加粗__。")).toEqual([
+			{
+				type: "unstyled",
+				text: "正文 需要加粗，还有 也需要加粗。",
+				inlineStyleRanges: [
+					{ offset: 3, length: 4, style: "BOLD" },
+					{ offset: 11, length: 5, style: "BOLD" }
+				]
+			}
 		]);
 	});
 });
