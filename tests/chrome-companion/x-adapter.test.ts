@@ -9,6 +9,9 @@ type XAdapter = {
 	getEditorReadiness(): { ready: boolean; terminal: boolean; reason: string };
 	prepareEditor(): Promise<{ ready: boolean; terminal: boolean; reason: string }>;
 	createArticleLabels: string[];
+	pageUploadScriptVersion: string;
+	pageUploadRequestSource: string;
+	pageUploadResponseSource: string;
 };
 
 describe("X Articles Chrome companion adapter", () => {
@@ -46,6 +49,9 @@ describe("X Articles Chrome companion adapter", () => {
 			reason: "x_drafts_pending"
 		});
 		expect(adapter.createArticleLabels).toEqual(["Write", "撰写"]);
+		expect(adapter.pageUploadScriptVersion).toBe("v6");
+		expect(adapter.pageUploadRequestSource).toBe("OTP_COMPANION_X_UPLOAD_REQUEST_V2");
+		expect(adapter.pageUploadResponseSource).toBe("OTP_COMPANION_X_UPLOAD_RESPONSE_V2");
 	});
 
 	it("recognizes a Chinese X Articles title field after the editor opens", () => {
@@ -62,6 +68,25 @@ describe("X Articles Chrome companion adapter", () => {
 
 		expect(adapter.getEditorReadiness()).toEqual({ ready: true, terminal: false, reason: "" });
 		expect(selectors[0]).toContain("placeholder*='标题'");
+	});
+
+	it("recognizes X's current lowercase Add a title textarea before auto-inserting", () => {
+		(globalThis as Record<string, unknown>).window = {
+			location: { href: "https://x.com/compose/articles/edit/123" }
+		};
+		(globalThis as Record<string, unknown>).document = {
+			querySelector: (selector: string) => {
+				if (selector.includes("placeholder*='title' i")) {
+					return {};
+				}
+				if (selector.includes("[contenteditable='true'][role='textbox']")) {
+					return {};
+				}
+				return null;
+			}
+		};
+
+		expect(adapter.getEditorReadiness()).toEqual({ ready: true, terminal: false, reason: "" });
 	});
 
 	it("clicks the visible Chinese compose action before waiting for the article editor", async () => {

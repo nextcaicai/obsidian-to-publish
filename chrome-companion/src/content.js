@@ -128,7 +128,7 @@ function renderPanel(task, adapter) {
 
 	const meta = document.createElement("div");
 	meta.textContent = adapter.id === "x"
-		? "x draft package received from Obsidian · X 诊断 v2"
+		? "x draft package received from Obsidian · X 诊断 v4"
 		: `${adapter.id} draft package received from Obsidian`;
 	meta.style.cssText = "color:#475569;margin-bottom:10px;";
 	panel.appendChild(meta);

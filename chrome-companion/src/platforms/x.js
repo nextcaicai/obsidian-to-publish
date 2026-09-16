@@ -17,14 +17,14 @@
 		}
 
 		const hasTitle = document.querySelector([
-			"input[placeholder*='Title']",
-			"textarea[placeholder*='Title']",
+			"input[placeholder*='title' i]",
+			"textarea[placeholder*='title' i]",
 			"input[placeholder*='标题']",
 			"textarea[placeholder*='标题']",
 			"[data-testid*='title' i][contenteditable='true']",
-			"[aria-label*='Title' i][contenteditable='true']",
+			"[aria-label*='title' i][contenteditable='true']",
 			"[aria-label*='标题'][contenteditable='true']",
-			"[contenteditable='true'][data-placeholder*='Title' i]"
+			"[contenteditable='true'][data-placeholder*='title' i]"
 		].join(","));
 		const hasBody = document.querySelector([
 			"[data-testid*='article' i] [contenteditable='true']",
@@ -155,20 +155,24 @@
 		pasteFilesAfterText: false,
 		replaceAssetUrlsInMarkdown: false,
 		pageUploadScript: "src/page-x-upload.js",
-		pageUploadScriptVersion: "v5",
-		pageUploadRequestSource: "OTP_COMPANION_X_UPLOAD_REQUEST_V1",
-		pageUploadResponseSource: "OTP_COMPANION_X_UPLOAD_RESPONSE_V1",
+		// The X editor is an SPA. A Companion reload can leave an older main-world
+		// page script alive in the same document, so version both its DOM id and its
+		// request channel. Otherwise the stale script can answer a new write request
+		// first and make the freshly opened editor look unwritable.
+		pageUploadScriptVersion: "v6",
+		pageUploadRequestSource: "OTP_COMPANION_X_UPLOAD_REQUEST_V2",
+		pageUploadResponseSource: "OTP_COMPANION_X_UPLOAD_RESPONSE_V2",
 		autoInsertTimeoutMs: 60000,
 		imageUploadWaitMs: 90000,
 		titleSelectors: [
-			"input[placeholder*='Title']",
-			"textarea[placeholder*='Title']",
+			"input[placeholder*='title' i]",
+			"textarea[placeholder*='title' i]",
 			"input[placeholder*='标题']",
 			"textarea[placeholder*='标题']",
 			"[data-testid*='title' i][contenteditable='true']",
-			"[aria-label*='Title' i][contenteditable='true']",
+			"[aria-label*='title' i][contenteditable='true']",
 			"[aria-label*='标题'][contenteditable='true']",
-			"[contenteditable='true'][data-placeholder*='Title' i]"
+			"[contenteditable='true'][data-placeholder*='title' i]"
 		],
 		bodySelectors: [
 			"[data-testid*='article' i] [contenteditable='true']",
