@@ -505,6 +505,7 @@ async function openTaskEditor(task) {
 		if (typeof tab.id !== "number") {
 			throw new Error("editor_tab_not_created");
 		}
+		await focusEditorWindow(tab);
 
 		if (!isCurrentActiveTask(task)) {
 			return;
@@ -535,6 +536,17 @@ async function openTaskEditor(task) {
 			status: "failed",
 			reason: error instanceof Error ? error.message : String(error)
 		});
+	}
+}
+
+async function focusEditorWindow(tab) {
+	if (typeof tab?.windowId !== "number") {
+		return;
+	}
+	try {
+		await chrome.windows.update(tab.windowId, { focused: true });
+	} catch (error) {
+		console.warn("Failed to focus the browser window for the editor tab.", error);
 	}
 }
 

@@ -62,8 +62,10 @@ function installChromeMock() {
 	};
 	const createdTabs: Array<Record<string, unknown>> = [];
 	const queryTabs: Array<Record<string, unknown>> = [];
+	const focusedWindows: Array<{ windowId: number; focused: boolean }> = [];
 	(globalThis as Record<string, unknown>).__OTP_CHROME_MOCK_STATE__ = {
 		createdTabs,
+		focusedWindows,
 		queryTabs,
 		storage
 	};
@@ -112,7 +114,12 @@ function installChromeMock() {
 			sendMessage: async () => undefined
 		},
 		windows: {
-			update: async () => undefined
+			update: async (windowId: number, updateInfo: { focused?: boolean }) => {
+				focusedWindows.push({
+					windowId,
+					focused: updateInfo.focused === true
+				});
+			}
 		}
 	};
 }
@@ -200,6 +207,7 @@ describe("Chrome companion background connection", () => {
 		const state = (globalThis as {
 			__OTP_CHROME_MOCK_STATE__: {
 				createdTabs: Array<{ url?: string }>;
+				focusedWindows: Array<{ windowId: number; focused: boolean }>;
 				storage: { substackEditorUrl: string };
 			};
 		}).__OTP_CHROME_MOCK_STATE__;
@@ -220,6 +228,7 @@ describe("Chrome companion background connection", () => {
 		});
 
 		expect(state.createdTabs[0].url).toBe("https://nextcaicai.substack.com/publish/home");
+		expect(state.focusedWindows).toEqual([{ windowId: 1, focused: true }]);
 	});
 
 	it("detects a personal Substack publication from an open publisher home tab", async () => {

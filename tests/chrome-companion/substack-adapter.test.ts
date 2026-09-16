@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
 const substackAdapterPath = require.resolve("../../chrome-companion/src/platforms/substack.js");
@@ -27,10 +27,13 @@ describe("Substack companion adapter", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		delete (globalThis as Record<string, unknown>).OTPCompanion;
 		delete (globalThis as Record<string, unknown>).window;
 		delete (globalThis as Record<string, unknown>).document;
 		delete (globalThis as Record<string, unknown>).HTMLElement;
+		delete (globalThis as Record<string, unknown>).MouseEvent;
+		delete (globalThis as Record<string, unknown>).PointerEvent;
 		delete require.cache[substackAdapterPath];
 	});
 
@@ -48,9 +51,13 @@ describe("Substack companion adapter", () => {
 		expect(adapter.articleActionLabels).toEqual(["Article", "文章"]);
 	});
 
-	it("clicks the visible Create action before the visible Article action", async () => {
-		const clicks: string[] = [];
-		let controls: FakeElement[] = [];
+	it("clicks Create before an Article action rendered as a non-semantic menu container", async () => {
+		vi.useFakeTimers();
+		const activations: string[] = [];
+		let phase: "create" | "article" = "create";
+		class FakeEvent {
+			constructor(public type: string) {}
+		}
 		class FakeElement {
 			hidden = false;
 
@@ -68,29 +75,52 @@ describe("Substack companion adapter", () => {
 				return [{}];
 			}
 
-			click(): void {
-				clicks.push(this.textContent);
-				if (this.textContent === "Create") {
-					controls = [new FakeElement("Article")];
+			click(): void {}
+
+			dispatchEvent(event: FakeEvent): boolean {
+				if (this.textContent === "Create" && event.type === "pointerdown") {
+					activations.push("Create");
+					phase = "article";
 				}
+				if (this.textContent === "Article" && event.type === "click") {
+					activations.push("Article");
+				}
+				return true;
 			}
+
+			focus(): void {}
+
+			scrollIntoView(): void {}
 		}
 
-		controls = [new FakeElement("Create")];
+		const createControl = new FakeElement("Create");
+		const articleContainer = new FakeElement("Article");
 		(globalThis as Record<string, unknown>).HTMLElement = FakeElement;
+		(globalThis as Record<string, unknown>).MouseEvent = FakeEvent;
+		(globalThis as Record<string, unknown>).PointerEvent = FakeEvent;
 		(globalThis as Record<string, unknown>).window = {
 			location: { href: "https://nextcaicai.substack.com/publish/home" },
 			getComputedStyle: () => ({ display: "block", visibility: "visible" })
 		};
 		(globalThis as Record<string, unknown>).document = {
-			querySelectorAll: () => controls
+			querySelectorAll: (selector: string) => {
+				if (phase === "create") {
+					return selector.startsWith("button") ? [createControl] : [];
+				}
+				if (selector.startsWith("button")) {
+					return [];
+				}
+				return selector === "body *" ? [articleContainer] : [];
+			}
 		};
 
-		await expect(adapter.prepareEditor()).resolves.toMatchObject({
+		const preparation = adapter.prepareEditor();
+		await vi.advanceTimersByTimeAsync(5100);
+		await expect(preparation).resolves.toMatchObject({
 			ready: false,
 			terminal: false,
 			reason: "substack_creating_article"
 		});
-		expect(clicks).toEqual(["Create", "Article"]);
+		expect(activations).toEqual(["Create", "Article"]);
 	});
 });
