@@ -94,6 +94,17 @@ describe("platform profiles", () => {
 		expect(strongRule?.style).toContain("font-weight:700");
 	});
 
+	it("keeps bold text at the normal body size for every rich HTML platform", () => {
+		for (const profile of PLATFORM_PROFILE_LIST.filter(
+			(candidate) => candidate.preferredFormat === "rich-html"
+		)) {
+			const strongRule = profile.rules.find((rule) => rule.selector === "strong");
+
+			expect(strongRule?.style, profile.label).toContain("font-size:16px");
+			expect(strongRule?.style, profile.label).toContain("font-weight:700");
+		}
+	});
+
 	it("keeps ordered list text at the normal body size for Zhishixingqiu", () => {
 		const listRule = PLATFORM_PROFILES.zhishixingqiu.rules.find(
 			(rule) => rule.selector === "ul,ol"

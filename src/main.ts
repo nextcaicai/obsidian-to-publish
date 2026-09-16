@@ -989,12 +989,18 @@ class WeChatPreviewCopyView extends ItemView {
 			void this.copyForCurrentPlatform();
 		});
 
-		this.openEditorButton = toolbarEl.createEl("button", { text: "" });
+		this.openEditorButton = toolbarEl.createEl("button", {
+			cls: "obsidian-to-publish-sync-drafts-button",
+			text: ""
+		});
 		this.openEditorButton.addEventListener("click", () => {
 			void this.copyAndOpenCurrentPlatform();
 		});
 
-		const refreshButton = toolbarEl.createEl("button", { text: "刷新" });
+		const refreshButton = toolbarEl.createEl("button", {
+			cls: "obsidian-to-publish-refresh-button",
+			text: "刷新"
+		});
 		refreshButton.addEventListener("click", () => {
 			void this.renderActiveFile({ force: true });
 		});

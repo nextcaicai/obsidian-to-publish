@@ -74,7 +74,7 @@ const LONG_FORM_RULES: PlatformStyleRule[] = [
 	},
 	{
 		selector: "strong",
-		style: "color:#1d2129;font-weight:700;"
+		style: "color:#1d2129;font-size:16px;font-weight:700;"
 	},
 	{
 		selector: "a",
@@ -204,7 +204,7 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 			},
 			{
 				selector: "strong",
-				style: "color:#1d2129;font-weight:700;"
+				style: "color:#1d2129;font-size:16px;font-weight:700;"
 			},
 			{
 				selector: "em",
