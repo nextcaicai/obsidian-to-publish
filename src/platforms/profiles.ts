@@ -463,7 +463,9 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 		id: "substack",
 		label: "Substack",
 		copyLabel: "Substack",
-		editorUrl: "https://substack.com/publish/post/",
+		// A publication-specific publisher cannot be derived safely from a generic
+		// public Substack URL. The companion resolves a saved personal dashboard.
+		editorUrl: "",
 		preferredFormat: "rich-html",
 		capabilities: {
 			...RICH_HTML_CAPABILITIES,

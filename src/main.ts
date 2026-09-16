@@ -50,7 +50,10 @@ import {
 	DEFAULT_CHROME_COMPANION_BRIDGE_SETTINGS,
 	generateChromeCompanionToken
 } from "./publishing/chrome-bridge";
-import { sendToChromeCompanionAndActivate } from "./publishing/chrome-delivery";
+import {
+	getChromeCompanionFallbackAction,
+	sendToChromeCompanionAndActivate
+} from "./publishing/chrome-delivery";
 import {
 	createWechatDraftFromPackage,
 	DEFAULT_WECHAT_OFFICIAL_SETTINGS,
@@ -785,18 +788,34 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 				? PLATFORM_PROFILES[target]
 				: this.getCurrentPlatformProfile();
 			const result = await this.getChromeCompanionBridgeService().request("article.importDraft", {
-				package: publishPackage
-			}, { timeoutMs: 15000 });
-			const accepted = isRecord(result) && result.accepted === true;
-			if (accepted) {
+				package: publishPackage,
+				// Only Substack needs a browser-verified editor receipt. Other existing
+				// adapters keep their immediate queue acknowledgement behavior.
+				awaitReceipt: target === "substack"
+			}, { timeoutMs: target === "substack" ? 25000 : 15000 });
+			const status = isRecord(result) && typeof result.status === "string"
+				? result.status
+				: "";
+			const completed = isRecord(result) && result.accepted === true && status === "completed";
+			const editorReady = isRecord(result) && result.accepted === true && status === "editor_ready";
+			if (completed || editorReady || (target !== "substack" && isRecord(result) && result.accepted === true)) {
 				if (shouldNotify) {
-					new Notice(`已发送到 Chrome 插件：${profile.copyLabel}。`);
+					new Notice(completed
+						? `已同步到 Chrome 插件：${profile.copyLabel}。`
+						: `Chrome 已确认 ${profile.copyLabel} 编辑器就绪，正在写入草稿。`);
 				}
 				return true;
 			}
 
 			if (shouldNotify) {
-				new Notice("Chrome 插件已响应，但未确认导入，请查看 Chrome 扩展日志。");
+				const reason = isRecord(result) && typeof result.reason === "string" ? result.reason : "";
+				if (reason === "substack_redirected_to_public_site") {
+					new Notice("Substack 跳转到了公共页面，已清除失效的发布地址；正文会保留在剪贴板。");
+				} else if (reason.startsWith("substack_editor_required")) {
+					new Notice("未找到 Substack 的 Create → Article 编辑器；正文会保留在剪贴板，请手动创建 Article 后重试。");
+				} else {
+					new Notice("Chrome 插件已响应，但未确认导入，请查看 Chrome 扩展日志。");
+				}
 			}
 			return false;
 		} catch (error) {
@@ -805,6 +824,10 @@ export default class WeChatPreviewCopyPlugin extends Plugin {
 				const errorMessage = error instanceof Error ? error.message : String(error);
 				if (errorMessage.includes("substack_publisher_not_found")) {
 					new Notice("未识别到个人 Substack。请先在 Chrome 打开自己的 Substack 后台，或在扩展选项中填写发布地址。");
+					return false;
+				}
+				if (errorMessage.includes("substack_publication_ambiguous")) {
+					new Notice("检测到多个 Substack 后台。请先切换到目标 publication 的后台标签页，再重新同步。");
 					return false;
 				}
 				const status = this.getChromeCompanionBridgeStatus();
@@ -1432,11 +1455,33 @@ class WeChatPreviewCopyView extends ItemView {
 						usedChromeCompanion: true
 					};
 				}
+				if (getChromeCompanionFallbackAction(platform) === "copy-only") {
+					const copied = await this.copyForCurrentPlatform({
+						platform,
+						notifyFailure: shouldNotify,
+						notifySuccess: false
+					});
+					if (shouldNotify && copied) {
+						new Notice("Substack 未确认同步，正文已保留在剪贴板。请在个人后台点击 Create → Article 后重试。");
+					}
+					return { success: false, usedChromeCompanion: false };
+				}
 				if (shouldNotify) {
 					new Notice("发送到 Chrome 插件失败，已改用复制并打开兜底。");
 				}
 			} catch (error) {
 				console.error(error);
+				if (getChromeCompanionFallbackAction(platform) === "copy-only") {
+					const copied = await this.copyForCurrentPlatform({
+						platform,
+						notifyFailure: shouldNotify,
+						notifySuccess: false
+					});
+					if (shouldNotify && copied) {
+						new Notice("Substack 未确认同步，正文已保留在剪贴板。请在个人后台点击 Create → Article 后重试。");
+					}
+					return { success: false, usedChromeCompanion: false };
+				}
 				if (shouldNotify) {
 					new Notice("发送到 Chrome 插件失败，已改用复制并打开兜底。");
 				}
@@ -1547,6 +1592,12 @@ class WeChatPreviewCopyView extends ItemView {
 		});
 		if (!result) {
 			return false;
+		}
+		if (platform === "substack") {
+			if (shouldNotify) {
+				new Notice("已复制富文本到 Substack。请在个人后台点击 Create → Article 后粘贴，不会打开公共 Substack 页面。");
+			}
+			return true;
 		}
 
 		const opened = await openPlatformEditor(profile.editorUrl);

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { sendToChromeCompanionAndActivate } from "../src/publishing/chrome-delivery";
+import {
+	getChromeCompanionFallbackAction,
+	sendToChromeCompanionAndActivate
+} from "../src/publishing/chrome-delivery";
 
 describe("Chrome companion delivery", () => {
 	it("activates the external browser after the companion opens the editor tab", async () => {
@@ -25,5 +28,13 @@ describe("Chrome companion delivery", () => {
 
 		expect(sent).toBe(false);
 		expect(activateBrowser).not.toHaveBeenCalled();
+	});
+
+	it("keeps a failed Substack delivery in the clipboard instead of opening its public fallback", () => {
+		expect(getChromeCompanionFallbackAction("substack")).toBe("copy-only");
+	});
+
+	it("keeps copy-and-open fallback for other Chrome companion platforms", () => {
+		expect(getChromeCompanionFallbackAction("zhihu")).toBe("copy-and-open");
 	});
 });

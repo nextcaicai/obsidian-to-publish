@@ -42,7 +42,9 @@ describe("platform profiles", () => {
 
 	it("declares a safe editor URL and output format for every platform", () => {
 		for (const profile of PLATFORM_PROFILE_LIST) {
-			expect(profile.editorUrl).toMatch(/^https:\/\//);
+			if (profile.id !== "substack") {
+				expect(profile.editorUrl).toMatch(/^https:\/\//);
+			}
 			expect(["rich-html", "markdown", "plain-text"]).toContain(profile.preferredFormat);
 			expect(profile.label.length).toBeGreaterThan(0);
 			expect(profile.copyLabel.length).toBeGreaterThan(0);
@@ -67,11 +69,11 @@ describe("platform profiles", () => {
 		expect(PLATFORM_PROFILES.x.capabilities.supportsMarkdown).toBe(true);
 	});
 
-	it("uses direct new-article editor URLs for browser companion targets", () => {
+	it("uses direct new-article editor URLs for browser companion targets except publication-scoped Substack", () => {
 		expect(PLATFORM_PROFILES.zhihu.editorUrl).toBe("https://zhuanlan.zhihu.com/write");
 		expect(PLATFORM_PROFILES.csdn.editorUrl).toBe("https://editor.csdn.net/md/");
 		expect(PLATFORM_PROFILES.juejin.editorUrl).toBe("https://juejin.cn/editor/drafts/new?v=2");
-		expect(PLATFORM_PROFILES.substack.editorUrl).toBe("https://substack.com/publish/post/");
+		expect(PLATFORM_PROFILES.substack.editorUrl).toBe("");
 	});
 
 	it("marks platforms that require remote image URLs", () => {

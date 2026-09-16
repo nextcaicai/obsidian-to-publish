@@ -63,7 +63,8 @@ function isSubstackPublisherUrl(value) {
 		const path = url.pathname.replace(/\/+$/g, "");
 		return url.protocol === "https:"
 			&& url.hostname.endsWith(".substack.com")
-			&& (path === "/publish" || path.startsWith("/publish/"));
+			&& url.hostname !== "substack.com"
+			&& (path === "/publish/home" || /^\/publish\/post\/[^/]+$/i.test(path));
 	} catch {
 		return false;
 	}
@@ -136,8 +137,20 @@ function renderPanel(task, adapter) {
 
 	const insertButton = createButton("尝试填入");
 	insertButton.addEventListener("click", async () => {
+		const readiness = getTaskEditorReadiness(adapter);
+		if (!readiness.ready) {
+			showInlineStatus(panel, getEditorReadinessMessage(readiness));
+			if (readiness.terminal) {
+				await reportTaskResult(task, "failed", readiness.reason || "editor_not_ready");
+			}
+			return;
+		}
+		await reportTaskStage(task, "editor_ready");
 		const result = await companion.insertDraftWithAdapter(task, adapter);
 		showInlineStatus(panel, getInsertResultMessage(result));
+		if (result.bodyInserted) {
+			await reportTaskResult(task, "succeeded", "body_inserted");
+		}
 	});
 	controls.appendChild(insertButton);
 
@@ -203,7 +216,36 @@ async function autoInsertDraft(task, adapter, panel) {
 
 		const startedAt = Date.now();
 		let titleAlreadyInserted = false;
+		let editorReadyReported = false;
+		let editorPreparationAttempted = false;
 		while (Date.now() - startedAt < (adapter.autoInsertTimeoutMs ?? companion.AUTO_INSERT_TIMEOUT_MS)) {
+			const readiness = getTaskEditorReadiness(adapter);
+			if (readiness.terminal) {
+				showInlineStatus(panel, getEditorReadinessMessage(readiness));
+				await reportTaskResult(task, "failed", readiness.reason || "editor_not_ready");
+				return;
+			}
+			if (!readiness.ready) {
+				if (!editorPreparationAttempted && typeof adapter.prepareEditor === "function") {
+					editorPreparationAttempted = true;
+					const preparation = await prepareTaskEditor(adapter);
+					if (preparation.terminal) {
+						showInlineStatus(panel, getEditorReadinessMessage(preparation));
+						await reportTaskResult(task, "failed", preparation.reason || "editor_not_ready");
+						return;
+					}
+					showInlineStatus(panel, getEditorReadinessMessage(preparation));
+					await companion.delay(companion.AUTO_INSERT_INTERVAL_MS);
+					continue;
+				}
+				showInlineStatus(panel, getEditorReadinessMessage(readiness));
+				await companion.delay(companion.AUTO_INSERT_INTERVAL_MS);
+				continue;
+			}
+			if (!editorReadyReported) {
+				await reportTaskStage(task, "editor_ready");
+				editorReadyReported = true;
+			}
 			const result = await companion.insertDraftWithAdapter(task, adapter, {
 				skipTitle: titleAlreadyInserted
 			});
@@ -228,6 +270,69 @@ async function autoInsertDraft(task, adapter, panel) {
 		console.error(error);
 		showInlineStatus(panel, "自动填入失败，请点击“尝试填入”重试。");
 		await reportTaskResult(task, "failed", error instanceof Error ? error.message : String(error));
+	}
+}
+
+async function prepareTaskEditor(adapter) {
+	try {
+		const preparation = await adapter.prepareEditor();
+		return {
+			ready: preparation?.ready === true,
+			terminal: preparation?.terminal === true,
+			reason: typeof preparation?.reason === "string" ? preparation.reason : ""
+		};
+	} catch (error) {
+		return {
+			ready: false,
+			terminal: true,
+			reason: error instanceof Error ? error.message : String(error)
+		};
+	}
+}
+
+function getTaskEditorReadiness(adapter) {
+	if (typeof adapter.getEditorReadiness !== "function") {
+		return { ready: true, terminal: false, reason: "" };
+	}
+	try {
+		const readiness = adapter.getEditorReadiness();
+		return {
+			ready: readiness?.ready === true,
+			terminal: readiness?.terminal === true,
+			reason: typeof readiness?.reason === "string" ? readiness.reason : ""
+		};
+	} catch (error) {
+		return {
+			ready: false,
+			terminal: true,
+			reason: error instanceof Error ? error.message : String(error)
+		};
+	}
+}
+
+function getEditorReadinessMessage(readiness) {
+	if (readiness.reason?.startsWith("substack_editor_required")) {
+		return "已打开个人 Substack 后台。请点击 Create → Article，打开真正编辑器后再重试同步。";
+	}
+	if (readiness.reason === "substack_creating_article") {
+		return "正在从个人 Substack 后台创建 Article，等待真实编辑器加载...";
+	}
+	if (readiness.terminal) {
+		return "当前不是可写入的编辑器页面，已停止自动填入。";
+	}
+	return "等待真实编辑器加载...";
+}
+
+async function reportTaskStage(task, status) {
+	try {
+		await chrome.runtime.sendMessage({
+			type: "task.stage",
+			taskId: task.id,
+			platform: task.platform,
+			status
+		});
+	} catch {
+		// Task completion still has the lifecycle timeout as a recovery boundary.
 	}
 }
 

@@ -12,8 +12,9 @@ const TASK_DELIVER_RETRY_LIMIT = 40;
 const TASK_DELIVER_RETRY_MS = 500;
 const TASK_CACHE_TTL_MS = 30 * 60 * 1000;
 const TASK_LIFECYCLE_TIMEOUT_MS = 5 * 60 * 1000;
+const TASK_RECEIPT_TIMEOUT_MS = 22000;
 const MAX_CONCURRENT_PLATFORM_TASKS = 2;
-const SUBSTACK_ARTICLE_PATH = "/publish/post?type=newsletter";
+const SUBSTACK_DASHBOARD_PATH = "/publish/home";
 
 const SUPPORTED_PLATFORMS = [
 	{ id: "x", label: "X Articles", editorUrl: "https://x.com/compose/articles" },
@@ -42,6 +43,8 @@ const readyPlatformQueue = [];
 const activeTaskIdByPlatform = new Map();
 /** @type {Map<string, number>} */
 const lifecycleTimersByTaskId = new Map();
+/** @type {Map<string, Array<(receipt: object) => void>>} */
+const taskReceiptWaitersByTaskId = new Map();
 
 let bridgeSocket = null;
 let heartbeatTimer = null;
@@ -93,7 +96,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 	if (changeInfo.status !== "complete" && !changeInfo.url) {
 		return;
 	}
-	if (!tasksByTabId.has(tabId)) {
+	const task = tasksByTabId.get(tabId);
+	if (!task) {
+		return;
+	}
+	if (task.platform === "substack" && changeInfo.url && !isAllowedSubstackTaskUrl(changeInfo.url)) {
+		void invalidateSubstackPublisherUrl(task.editorUrl);
+		void settleTask(task.id, { status: "failed", reason: getSubstackTaskUrlFailure(changeInfo.url) });
 		return;
 	}
 	void deliverTaskToTab(tabId);
@@ -145,6 +154,10 @@ async function handleRuntimeMessage(message, sender) {
 		return handleTaskResult(message, sender);
 	}
 
+	if (message.type === "task.stage") {
+		return handleTaskStage(message, sender);
+	}
+
 	if (message.type === "task.clearAll") {
 		await clearTask();
 		return { ok: true };
@@ -160,12 +173,16 @@ async function handleRuntimeMessage(message, sender) {
 	}
 
 	if (message.type === "substack.detectEditorUrl") {
-		const editorUrl = await findOpenSubstackEditorUrl();
-		if (editorUrl) {
-			await rememberSubstackEditorUrl(editorUrl);
-			return { ok: true, editorUrl };
+		try {
+			const editorUrl = await findOpenSubstackEditorUrl();
+			if (editorUrl) {
+				await rememberSubstackEditorUrl(editorUrl);
+				return { ok: true, editorUrl };
+			}
+			return { ok: false, error: "not_found" };
+		} catch (error) {
+			return { ok: false, error: error instanceof Error ? error.message : String(error) };
 		}
-		return { ok: false, error: "not_found" };
 	}
 
 	return { ok: false, error: "unknown_message" };
@@ -406,7 +423,7 @@ async function importDraft(params) {
 	queueTask(task);
 	void drainTaskQueue();
 
-	return {
+	const queuedReceipt = {
 		accepted: true,
 		taskId: task.id,
 		platform: platform.id,
@@ -414,6 +431,12 @@ async function importDraft(params) {
 		tabId: null,
 		status: task.status
 	};
+
+	if (params?.awaitReceipt !== true) {
+		return queuedReceipt;
+	}
+
+	return await waitForTaskReceipt(task, params?.receiptTimeoutMs);
 }
 
 function queueTask(task) {
@@ -551,6 +574,27 @@ async function handleTaskResult(message, sender) {
 	return { ok: true };
 }
 
+async function handleTaskStage(message, sender) {
+	const taskId = typeof message?.taskId === "string" ? message.taskId.trim() : "";
+	const platform = typeof message?.platform === "string" ? message.platform.trim() : "";
+	const tabId = typeof sender?.tab?.id === "number" ? sender.tab.id : null;
+	if (!taskId || !platform || tabId === null || message?.status !== "editor_ready") {
+		return { ok: false, error: "invalid_task_stage" };
+	}
+
+	const task = tasksById.get(taskId);
+	if (!task || !isMatchingTaskIdentity(task, { taskId, platform, tabId })) {
+		return { ok: false, error: "task_identity_mismatch" };
+	}
+
+	task.status = "editor_ready";
+	task.receipt = {
+		status: "editor_ready",
+		reason: typeof message.reason === "string" ? message.reason : ""
+	};
+	return { ok: true };
+}
+
 function normalizeTaskResultStatus(status) {
 	return status === "succeeded" || status === "completed" ? "succeeded" : "failed";
 }
@@ -578,6 +622,7 @@ async function settleTask(taskId, { status = "failed", reason = "" } = {}) {
 	task.status = "settled";
 	task.completedAt = new Date().toISOString();
 	task.result = { status, reason };
+	resolveTaskReceiptWaiters(task, createTaskReceipt(task));
 	clearLifecycleTimer(task.id);
 
 	if (typeof task.tabId === "number" && tasksByTabId.get(task.tabId)?.id === task.id) {
@@ -604,6 +649,96 @@ async function settleTask(taskId, { status = "failed", reason = "" } = {}) {
 		void drainTaskQueue();
 	}
 	return true;
+}
+
+function waitForTaskReceipt(task, requestedTimeoutMs) {
+	const timeoutMs = typeof requestedTimeoutMs === "number"
+		&& Number.isFinite(requestedTimeoutMs)
+		&& requestedTimeoutMs > 0
+		? Math.min(requestedTimeoutMs, TASK_RECEIPT_TIMEOUT_MS)
+		: TASK_RECEIPT_TIMEOUT_MS;
+	const existingReceipt = createTaskReceipt(task);
+	if (existingReceipt.status === "completed" || existingReceipt.status === "failed") {
+		return Promise.resolve(existingReceipt);
+	}
+
+	return new Promise((resolve) => {
+		const complete = (receipt) => {
+			clearTimeout(timeout);
+			removeTaskReceiptWaiter(task.id, complete);
+			resolve(receipt);
+		};
+		const timeout = setTimeout(() => {
+			const receipt = createTaskReceipt(task);
+			complete(receipt.status === "editor_ready"
+				? receipt
+				: {
+					accepted: false,
+					taskId: task.id,
+					platform: task.platform,
+					status: "pending",
+					reason: "editor_ready_timeout"
+				});
+		}, timeoutMs);
+		const waiters = taskReceiptWaitersByTaskId.get(task.id) || [];
+		waiters.push(complete);
+		taskReceiptWaitersByTaskId.set(task.id, waiters);
+	});
+}
+
+function createTaskReceipt(task) {
+	if (task?.result?.status === "succeeded") {
+		return {
+			accepted: true,
+			taskId: task.id,
+			platform: task.platform,
+			status: "completed",
+			reason: task.result.reason || ""
+		};
+	}
+	if (task?.result?.status === "failed") {
+		return {
+			accepted: false,
+			taskId: task.id,
+			platform: task.platform,
+			status: "failed",
+			reason: task.result.reason || ""
+		};
+	}
+	if (task?.status === "editor_ready") {
+		return {
+			accepted: true,
+			taskId: task.id,
+			platform: task.platform,
+			status: "editor_ready",
+			reason: task.receipt?.reason || ""
+		};
+	}
+	return {
+		accepted: false,
+		taskId: task?.id || "",
+		platform: task?.platform || "",
+		status: "pending",
+		reason: ""
+	};
+}
+
+function resolveTaskReceiptWaiters(task, receipt) {
+	const waiters = taskReceiptWaitersByTaskId.get(task.id) || [];
+	taskReceiptWaitersByTaskId.delete(task.id);
+	for (const waiter of waiters) {
+		waiter(receipt);
+	}
+}
+
+function removeTaskReceiptWaiter(taskId, waiter) {
+	const waiters = taskReceiptWaitersByTaskId.get(taskId) || [];
+	const remaining = waiters.filter((candidate) => candidate !== waiter);
+	if (remaining.length > 0) {
+		taskReceiptWaitersByTaskId.set(taskId, remaining);
+	} else {
+		taskReceiptWaitersByTaskId.delete(taskId);
+	}
 }
 
 function removeQueuedTaskId(platform, taskId) {
@@ -873,6 +1008,12 @@ async function clearTask({ platform = "", tabId = null } = {}) {
 		queuedTaskIdsByPlatform.clear();
 		readyPlatformQueue.length = 0;
 		activeTaskIdByPlatform.clear();
+		for (const [taskId, waiters] of taskReceiptWaitersByTaskId.entries()) {
+			taskReceiptWaitersByTaskId.delete(taskId);
+			for (const waiter of waiters) {
+				waiter({ accepted: false, taskId, platform: "", status: "failed", reason: "cleared" });
+			}
+		}
 		for (const timerTabId of deliverTimersByTabId.keys()) {
 			clearDeliverTimer(timerTabId);
 		}
@@ -1005,15 +1146,26 @@ async function findOpenSubstackEditorUrl() {
 	if (!chrome.tabs?.query) {
 		return "";
 	}
+	let tabs;
 	try {
-		const tabs = await chrome.tabs.query({
+		tabs = await chrome.tabs.query({
 			url: ["https://*.substack.com/publish/*"]
 		});
-		const personalTab = tabs.find((tab) => isPersonalSubstackEditorUrl(tab.url));
-		return normalizeSubstackEditorUrl(personalTab?.url) || "";
 	} catch {
 		return "";
 	}
+	const personalTabs = tabs
+		.filter((tab) => isPersonalSubstackPublisherUrl(tab.url))
+		.sort(compareSubstackPublisherTabs);
+	if (personalTabs.length === 0) {
+		return "";
+	}
+	const preferred = personalTabs[0];
+	const competingHosts = new Set(personalTabs.map((tab) => new URL(tab.url).hostname));
+	if (!preferred.active && competingHosts.size > 1) {
+		throw new Error("substack_publication_ambiguous: Open the target publication dashboard, then click Detect Substack again.");
+	}
+	return normalizeSubstackEditorUrl(preferred.url) || "";
 }
 
 async function rememberSubstackEditorUrl(value) {
@@ -1059,14 +1211,16 @@ function normalizeSubstackEditorUrl(value) {
 		if (url.protocol !== "https:") {
 			return "";
 		}
-		if (!url.hostname.endsWith(".substack.com")) {
+		if (!isPersonalSubstackHost(url.hostname)) {
 			return "";
 		}
 		const path = url.pathname.replace(/\/+$/g, "");
-		if (path !== "/publish" && !path.startsWith("/publish/")) {
+		// Accept the legacy saved `/publish/post` form only so it can be migrated
+		// to the personal dashboard. It is never treated as a writable editor.
+		if (path !== "/publish/home" && path !== "/publish/post" && !isSubstackEditorPath(path)) {
 			return "";
 		}
-		return `${url.origin}${SUBSTACK_ARTICLE_PATH}`;
+		return `${url.origin}${SUBSTACK_DASHBOARD_PATH}`;
 	} catch {
 		return "";
 	}
@@ -1078,9 +1232,63 @@ function isPersonalSubstackEditorUrl(value) {
 		return false;
 	}
 	try {
-		return new URL(normalized).hostname.endsWith(".substack.com");
+		return isPersonalSubstackHost(new URL(normalized).hostname);
 	} catch {
 		return false;
+	}
+}
+
+function isPersonalSubstackHost(hostname) {
+	return typeof hostname === "string"
+		&& hostname.endsWith(".substack.com")
+		&& hostname !== "substack.com";
+}
+
+function isSubstackEditorPath(pathname) {
+	return /^\/publish\/post\/[^/]+\/?$/i.test(pathname);
+}
+
+function isPersonalSubstackPublisherUrl(value) {
+	try {
+		const url = new URL(value);
+		const path = url.pathname.replace(/\/+$/g, "");
+		return url.protocol === "https:"
+			&& isPersonalSubstackHost(url.hostname)
+			&& (path === "/publish/home" || isSubstackEditorPath(path));
+	} catch {
+		return false;
+	}
+}
+
+function compareSubstackPublisherTabs(left, right) {
+	if (Boolean(left.active) !== Boolean(right.active)) {
+		return left.active ? -1 : 1;
+	}
+	return Number(right.lastAccessed || 0) - Number(left.lastAccessed || 0);
+}
+
+function isAllowedSubstackTaskUrl(value) {
+	return isPersonalSubstackPublisherUrl(value);
+}
+
+function getSubstackTaskUrlFailure(value) {
+	try {
+		const url = new URL(value);
+		if (url.hostname === "substack.com") {
+			return "substack_redirected_to_public_site";
+		}
+	} catch {
+		// Fall through to the generic unsafe destination reason.
+	}
+	return "substack_not_personal_publisher";
+}
+
+async function invalidateSubstackPublisherUrl(value) {
+	const stored = await chrome.storage.local.get({
+		[STORAGE_KEYS.substackEditorUrl]: ""
+	});
+	if (normalizeSubstackEditorUrl(stored[STORAGE_KEYS.substackEditorUrl]) === normalizeSubstackEditorUrl(value)) {
+		await chrome.storage.local.remove(STORAGE_KEYS.substackEditorUrl);
 	}
 }
 
@@ -1129,6 +1337,19 @@ if (globalThis.__OTP_COMPANION_BACKGROUND_TEST__ === true) {
 				tabId: task.tabId
 			}))
 		}),
+		handleSubstackTaskNavigation: async (taskId, url) => {
+			const task = tasksById.get(taskId);
+			if (!task || task.platform !== "substack") {
+				return false;
+			}
+			if (isAllowedSubstackTaskUrl(url)) {
+				return true;
+			}
+			await invalidateSubstackPublisherUrl(task.editorUrl);
+			await settleTask(task.id, { status: "failed", reason: getSubstackTaskUrlFailure(url) });
+			return false;
+		},
+		handleTaskStage,
 		handleTabRemoved,
 		handleTaskResult,
 		importDraft,

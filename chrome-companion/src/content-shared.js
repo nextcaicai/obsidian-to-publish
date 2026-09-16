@@ -11,7 +11,11 @@
 
 	function getPlatformAdapter() {
 		const host = window.location.hostname;
+		const href = window.location.href;
 		return adapters.find((adapter) => {
+			if (typeof adapter.matchesUrl === "function") {
+				return adapter.matchesUrl(href);
+			}
 			if (typeof adapter.matchesHost === "function") {
 				return adapter.matchesHost(host);
 			}

@@ -195,7 +195,7 @@ describe("Chrome companion background connection", () => {
 		});
 	});
 
-	it("opens a remembered personal Substack editor URL for Substack imports", async () => {
+	it("opens the remembered personal Substack dashboard for Substack imports", async () => {
 		require(backgroundPath);
 		const state = (globalThis as {
 			__OTP_CHROME_MOCK_STATE__: {
@@ -219,7 +219,7 @@ describe("Chrome companion background connection", () => {
 			}
 		});
 
-		expect(state.createdTabs[0].url).toBe("https://nextcaicai.substack.com/publish/post?type=newsletter");
+		expect(state.createdTabs[0].url).toBe("https://nextcaicai.substack.com/publish/home");
 	});
 
 	it("detects a personal Substack publication from an open publisher home tab", async () => {
@@ -250,9 +250,9 @@ describe("Chrome companion background connection", () => {
 		});
 
 		expect(state.storage.substackEditorUrl)
-			.toBe("https://nextcaicai.substack.com/publish/post?type=newsletter");
+			.toBe("https://nextcaicai.substack.com/publish/home");
 		expect(state.createdTabs[0].url)
-			.toBe("https://nextcaicai.substack.com/publish/post?type=newsletter");
+			.toBe("https://nextcaicai.substack.com/publish/home");
 	});
 
 	it("does not open the public Substack discovery page when no publication is known", async () => {
@@ -279,6 +279,80 @@ describe("Chrome companion background connection", () => {
 		expect(state.createdTabs).toHaveLength(0);
 	});
 
+	it("refuses to guess between multiple inactive personal publications", async () => {
+		require(backgroundPath);
+		const state = (globalThis as {
+			__OTP_CHROME_MOCK_STATE__: {
+				createdTabs: Array<{ url?: string }>;
+				queryTabs: Array<{ url?: string; active?: boolean; lastAccessed?: number }>;
+			};
+		}).__OTP_CHROME_MOCK_STATE__;
+		const api = (globalThis as {
+			OTPCompanionBackground: {
+				importDraft(params: unknown): Promise<unknown>;
+			};
+		}).OTPCompanionBackground;
+		state.queryTabs.push(
+			{ url: "https://first.substack.com/publish/home", lastAccessed: 20 },
+			{ url: "https://second.substack.com/publish/home", lastAccessed: 10 }
+		);
+
+		await expect(api.importDraft({
+			package: {
+				version: 1,
+				source: "obsidian-to-publish",
+				requestId: "pub_substack_ambiguous",
+				targets: ["substack"]
+			}
+		})).rejects.toThrow("substack_publication_ambiguous");
+		expect(state.createdTabs).toHaveLength(0);
+	});
+
+	it("fails and clears the remembered publisher when a Substack task redirects to the public root", async () => {
+		require(backgroundPath);
+		const state = (globalThis as {
+			__OTP_CHROME_MOCK_STATE__: {
+				storage: { substackEditorUrl?: string };
+			};
+		}).__OTP_CHROME_MOCK_STATE__;
+		const api = (globalThis as {
+			OTPCompanionBackground: {
+				importDraft(params: unknown): Promise<{
+					accepted: boolean;
+					taskId: string;
+					status: string;
+					reason?: string;
+				}>;
+				handleSubstackTaskNavigation(taskId: string, url: string): Promise<boolean>;
+			};
+		}).OTPCompanionBackground;
+		state.storage.substackEditorUrl = "https://nextcaicai.substack.com/publish/home";
+
+		const receipt = api.importDraft({
+			awaitReceipt: true,
+			package: {
+				version: 1,
+				source: "obsidian-to-publish",
+				requestId: "pub_substack_root_redirect",
+				targets: ["substack"]
+			}
+		});
+		for (let index = 0; index < 8; index += 1) {
+			await Promise.resolve();
+		}
+		await expect(api.handleSubstackTaskNavigation(
+			"pub_substack_root_redirect",
+			"https://substack.com/publish/post"
+		)).resolves.toBe(false);
+
+		await expect(receipt).resolves.toMatchObject({
+			accepted: false,
+			status: "failed",
+			reason: "substack_redirected_to_public_site"
+		});
+		expect(state.storage.substackEditorUrl).toBeUndefined();
+	});
+
 	it("normalizes pasted personal Substack URLs", () => {
 		require(backgroundPath);
 		const api = (globalThis as {
@@ -288,9 +362,9 @@ describe("Chrome companion background connection", () => {
 		}).OTPCompanionBackground;
 
 		expect(api.normalizeSubstackEditorUrl("https://nextcaicai.substack.com/publish/post，"))
-			.toBe("https://nextcaicai.substack.com/publish/post?type=newsletter");
+			.toBe("https://nextcaicai.substack.com/publish/home");
 		expect(api.normalizeSubstackEditorUrl("https://nextcaicai.substack.com/publish/home"))
-			.toBe("https://nextcaicai.substack.com/publish/post?type=newsletter");
+			.toBe("https://nextcaicai.substack.com/publish/home");
 		expect(api.normalizeSubstackEditorUrl("https://substack.com/publish/post"))
 			.toBe("");
 		expect(api.normalizeSubstackEditorUrl("https://example.com/publish/post"))

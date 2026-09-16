@@ -98,6 +98,10 @@ async function detectSubstackEditorUrl() {
 		showMessage(`已识别 Substack 发布地址：${response.editorUrl}`);
 		return;
 	}
+	if (typeof response?.error === "string" && response.error.startsWith("substack_publication_ambiguous")) {
+		showMessage("检测到多个 Substack 后台。请切换到要发布的个人后台标签页后，再点击“检测 Substack”。");
+		return;
+	}
 	showMessage("没有找到已打开的个人 Substack 后台，请先打开你的 Substack 后台首页。");
 }
 

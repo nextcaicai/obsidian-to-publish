@@ -16,6 +16,10 @@ type BackgroundApi = {
 		message: { taskId: string; platform: string; status: string; reason?: string },
 		sender: { tab: { id: number } }
 	): Promise<{ ok: boolean; error?: string }>;
+	handleTaskStage(
+		message: { taskId: string; platform: string; status: "editor_ready" },
+		sender: { tab: { id: number } }
+	): Promise<{ ok: boolean; error?: string }>;
 	handleTabRemoved(tabId: number): Promise<void>;
 	importDraft(params: unknown): Promise<{ accepted: boolean; taskId: string; platform: string; status: string }>;
 };
@@ -162,6 +166,40 @@ describe("Chrome companion platform task scheduler", () => {
 		await api.importDraft(importParams("same-id", "x"));
 		await expect(api.importDraft(importParams("same-id", "zhihu")))
 			.rejects.toThrow("Duplicate active taskId");
+	});
+
+	it("records editor-ready before returning the final completion receipt", async () => {
+		const api = getApi();
+		const receipt = api.importDraft({
+			awaitReceipt: true,
+			package: {
+				version: 1,
+				source: "obsidian-to-publish",
+				requestId: "x-editor-ready",
+				targets: ["x"]
+			}
+		});
+		await flushScheduler();
+
+		await expect(api.handleTaskStage(
+			{ taskId: "x-editor-ready", platform: "x", status: "editor_ready" },
+			{ tab: { id: 1 } }
+		)).resolves.toEqual({ ok: true });
+		expect(api.getSchedulerSnapshot().tasks).toContainEqual({
+			id: "x-editor-ready",
+			platform: "x",
+			status: "editor_ready",
+			tabId: 1
+		});
+		await expect(api.handleTaskResult(
+			{ taskId: "x-editor-ready", platform: "x", status: "completed" },
+			{ tab: { id: 1 } }
+		)).resolves.toEqual({ ok: true });
+		await expect(receipt).resolves.toMatchObject({
+			accepted: true,
+			status: "completed",
+			taskId: "x-editor-ready"
+		});
 	});
 
 	it("serializes one platform while a failure releases only that platform's next task", async () => {
