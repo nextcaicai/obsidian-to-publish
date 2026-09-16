@@ -1,12 +1,13 @@
 (function () {
 	const REQUEST_SOURCE = "OTP_COMPANION_X_UPLOAD_REQUEST_V1";
 	const RESPONSE_SOURCE = "OTP_COMPANION_X_UPLOAD_RESPONSE_V1";
-	const EDITOR_SELECTOR = [
+	const X_DIAGNOSTIC_PREFIX = "[OTP-X-DIAG]";
+	const EDITOR_SELECTORS = [
 		"[data-contents='true'] [contenteditable='true']",
 		"[contenteditable='true'][role='textbox']",
 		"[contenteditable='true'].public-DraftEditor-content",
 		"[contenteditable='true']"
-	].join(",");
+	];
 
 	window.addEventListener("message", (event) => {
 		if (event.source !== window || event.data?.source !== REQUEST_SOURCE) {
@@ -19,6 +20,11 @@
 	async function handleUploadRequest(message) {
 		const assets = Array.isArray(message.assets) ? message.assets : [];
 		const options = message.options || {};
+		logDiagnostic("page-request", {
+			markdownLength: typeof message.markdown === "string" ? message.markdown.length : 0,
+			assetCount: assets.length,
+			editor: describeEditorElement(findEditorElement())
+		});
 		let bodyWritten = false;
 		if (typeof message.markdown === "string") {
 			const draftNode = await waitForValue(
@@ -27,13 +33,16 @@
 				150
 			);
 			if (!draftNode) {
-				postResponse(message.requestId, false, [], false, "X article editor was not reachable.");
+				const diagnostic = describeEditorElement(findEditorElement());
+				logDiagnostic("draft-state-not-found", { editor: diagnostic });
+				postResponse(message.requestId, false, [], false, `x_draft_state_not_found:${formatEditorDiagnostic(diagnostic)}`);
 				return;
 			}
 
 			const writableNode = await ensureDraftCharacterSample(draftNode);
 			const writeResult = writeDraftMarkdown(writableNode, message.markdown);
 			if (!writeResult.ok) {
+				logDiagnostic("draft-write-failed", { error: writeResult.error });
 				postResponse(message.requestId, false, [], false, writeResult.error);
 				return;
 			}
@@ -87,6 +96,7 @@
 		}
 
 		postResponse(message.requestId, true, uploads, bodyWritten);
+		logDiagnostic("page-request-complete", { bodyWritten, uploadCount: uploads.length });
 	}
 
 	function postResponse(requestId, ok, uploads, bodyWritten, error = "") {
@@ -174,13 +184,57 @@
 	}
 
 	function findEditorElement() {
-		for (const element of Array.from(document.querySelectorAll(EDITOR_SELECTOR))) {
-			const rect = element.getBoundingClientRect();
-			if (rect.width > 200 && rect.height > 80) {
-				return element;
+		for (const selector of EDITOR_SELECTORS) {
+			for (const element of Array.from(document.querySelectorAll(selector))) {
+				const rect = element.getBoundingClientRect();
+				// A newly opened Article has an empty one-line Draft.js body. Its editable
+				// node grows only after text is inserted, so a large-height threshold makes
+				// the actual editor invisible exactly when the Companion needs it first.
+				if (rect.width > 200 && rect.height > 16 && !isTitleElement(element)) {
+					return element;
+				}
 			}
 		}
 		return null;
+	}
+
+	function isTitleElement(element) {
+		if (typeof element?.getAttribute !== "function") {
+			return false;
+		}
+		const text = [
+			element.getAttribute("aria-label"),
+			element.getAttribute("placeholder"),
+			element.getAttribute("data-placeholder"),
+			element.getAttribute("data-testid")
+		].join(" ");
+		return /title|headline|标题|题目/i.test(text);
+	}
+
+	function describeEditorElement(element) {
+		if (!element) {
+			return null;
+		}
+		const rect = element.getBoundingClientRect();
+		return {
+			tag: element.tagName?.toLowerCase?.() || "unknown",
+			role: element.getAttribute?.("role") || "",
+			contentEditable: element.isContentEditable === true,
+			width: Math.round(rect.width),
+			height: Math.round(rect.height),
+			hasReactFiber: Boolean(findReactFiber(element))
+		};
+	}
+
+	function formatEditorDiagnostic(value) {
+		if (!value) {
+			return "none";
+		}
+		return `${value.tag}:${value.role || "no-role"}:${value.width}x${value.height}:fiber=${value.hasReactFiber}`;
+	}
+
+	function logDiagnostic(stage, details) {
+		console.info(`${X_DIAGNOSTIC_PREFIX} ${stage}`, details);
 	}
 
 	function findReactFiber(element) {
@@ -625,5 +679,11 @@
 
 	function delay(ms) {
 		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	const api = { findEditorElement };
+	globalThis.OTPXUpload = api;
+	if (typeof module !== "undefined" && module.exports) {
+		module.exports = api;
 	}
 })();

@@ -127,7 +127,9 @@ function renderPanel(task, adapter) {
 	panel.appendChild(title);
 
 	const meta = document.createElement("div");
-	meta.textContent = `${adapter.id} draft package received from Obsidian`;
+	meta.textContent = adapter.id === "x"
+		? "x draft package received from Obsidian · X 诊断 v2"
+		: `${adapter.id} draft package received from Obsidian`;
 	meta.style.cssText = "color:#475569;margin-bottom:10px;";
 	panel.appendChild(meta);
 
@@ -218,6 +220,7 @@ async function autoInsertDraft(task, adapter, panel) {
 		let titleAlreadyInserted = false;
 		let editorReadyReported = false;
 		let editorPreparationAttempted = false;
+		let lastInsertResult = null;
 		while (Date.now() - startedAt < (adapter.autoInsertTimeoutMs ?? companion.AUTO_INSERT_TIMEOUT_MS)) {
 			const readiness = getTaskEditorReadiness(adapter);
 			if (readiness.terminal) {
@@ -249,6 +252,7 @@ async function autoInsertDraft(task, adapter, panel) {
 			const result = await companion.insertDraftWithAdapter(task, adapter, {
 				skipTitle: titleAlreadyInserted
 			});
+			lastInsertResult = result;
 			titleAlreadyInserted = titleAlreadyInserted || result.titleInserted;
 			if (result.bodyInserted) {
 				sessionStorage.setItem(sessionKey, "true");
@@ -260,8 +264,18 @@ async function autoInsertDraft(task, adapter, panel) {
 				return;
 			}
 
-			showInlineStatus(panel, titleAlreadyInserted ? "已写入标题，等待正文编辑器加载..." : "等待编辑器加载...");
+			if (adapter.id === "x" && result.error) {
+				showInlineStatus(panel, `X 诊断：${result.error}；持续重试中...`);
+			} else {
+				showInlineStatus(panel, titleAlreadyInserted ? "已写入标题，等待正文编辑器加载..." : "等待编辑器加载...");
+			}
 			await companion.delay(companion.AUTO_INSERT_INTERVAL_MS);
+		}
+
+		if (adapter.id === "x" && lastInsertResult?.error) {
+			showInlineStatus(panel, `X 编辑器写入失败：${lastInsertResult.error}`);
+			await reportTaskResult(task, "failed", lastInsertResult.error);
+			return;
 		}
 
 		showInlineStatus(panel, "未找到可写入的编辑区域，请点击正文编辑器后点“尝试填入”。");
@@ -358,6 +372,9 @@ async function reportTaskResult(task, status, reason) {
 }
 
 function getInsertResultMessage(result) {
+	if (result.error) {
+		return `X 编辑器写入失败：${result.error}`;
+	}
 	const imageSuffix = getImageResultSuffix(result);
 	if (result.titleInserted && result.bodyInserted) {
 		return `已尝试写入标题和正文${imageSuffix}。`;

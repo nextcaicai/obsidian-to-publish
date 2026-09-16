@@ -2,6 +2,7 @@
 	const PANEL_ID = "obsidian-to-publish-companion-panel";
 	const AUTO_INSERT_TIMEOUT_MS = 20000;
 	const AUTO_INSERT_INTERVAL_MS = 700;
+	const X_DIAGNOSTIC_PREFIX = "[OTP-X-DIAG]";
 	const adapters = [];
 	const uploadCachesByPlatform = new Map();
 
@@ -28,10 +29,17 @@
 		const payload = buildDraftPayload(task, adapter);
 		const titleInserted = options.skipTitle ? false : await tryInsertTitle(title, adapter);
 		const bodyResult = await tryInsertBody(payload, adapter);
+		logXDiagnostic(adapter, "draft-result", {
+			titleInserted,
+			bodyInserted: bodyResult.inserted === true,
+			error: typeof bodyResult.error === "string" ? bodyResult.error : "",
+			imageCount: Array.isArray(payload.assets) ? payload.assets.length : 0
+		});
 
 		return {
 			titleInserted,
 			bodyInserted: bodyResult.inserted,
+			error: typeof bodyResult.error === "string" ? bodyResult.error : "",
 			imageIncluded: bodyResult.imageIncluded,
 			imageDelivery: bodyResult.imageDelivery,
 			imageTotal: bodyResult.imageTotal || 0,
@@ -46,6 +54,10 @@
 		}
 
 		let target = findTitleWritableElement(adapter);
+		logXDiagnostic(adapter, "title-target", {
+			found: Boolean(target),
+			target: describeWritableElement(target)
+		});
 		if (!target) {
 			if (!clickPotentialTitlePlaceholder(adapter)) {
 				return false;
@@ -73,17 +85,29 @@
 
 	async function tryInsertBody(payload, adapter) {
 		if (!payload.text.trim() && !payload.html.trim() && payload.files.length === 0) {
+			logXDiagnostic(adapter, "payload-empty", {
+				hasText: Boolean(payload.text.trim()),
+				hasHtml: Boolean(payload.html.trim()),
+				fileCount: payload.files.length
+			});
 			return {
 				inserted: false,
-				imageIncluded: false
+				imageIncluded: false,
+				error: "x_payload_empty"
 			};
 		}
 
 		const target = getFocusedBodyElement(adapter) || findBodyWritableElement(adapter);
+		logXDiagnostic(adapter, "body-target", {
+			found: Boolean(target),
+			target: describeWritableElement(target),
+			active: describeWritableElement(document.activeElement)
+		});
 		if (!target) {
 			return {
 				inserted: false,
-				imageIncluded: false
+				imageIncluded: false,
+				error: "x_body_target_not_found"
 			};
 		}
 
@@ -1152,20 +1176,36 @@
 		if (!adapter.pageUploadScript) {
 			return {
 				inserted: false,
-				imageIncluded: false
+				imageIncluded: false,
+				error: "x_page_script_not_configured"
 			};
 		}
+		logXDiagnostic(adapter, "page-write-start", {
+			markdownLength: markerPlan.markdown.length,
+			imageCount: markerPlan.images.length,
+			dependencies: (adapter.pageUploadDependencies || []).length
+		});
 
 		for (const dependency of adapter.pageUploadDependencies || []) {
 			const dependencyLoaded = await injectPageScript(dependency, adapter.pageUploadScriptVersion);
 			if (!dependencyLoaded) {
+				logXDiagnostic(adapter, "page-dependency-failed", { dependency });
 				return {
 					inserted: false,
-					imageIncluded: false
+					imageIncluded: false,
+					error: `x_page_dependency_not_loaded:${dependency}`
 				};
 			}
 		}
-		await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
+		const pageScriptLoaded = await injectPageScript(adapter.pageUploadScript, adapter.pageUploadScriptVersion);
+		if (!pageScriptLoaded) {
+			logXDiagnostic(adapter, "page-script-load-failed", { script: adapter.pageUploadScript });
+			return {
+				inserted: false,
+				imageIncluded: false,
+				error: `x_page_script_not_loaded:${adapter.pageUploadScript}`
+			};
+		}
 		const requestId = `otp-write-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 		const assets = markerPlan.images.map((image) => ({
 			name: image.asset.fileName || `${image.asset.id}.png`,
@@ -1183,6 +1223,7 @@
 				resolve({
 					ok: false,
 					bodyWritten: false,
+					error: "x_page_script_response_timeout",
 					uploads: new Array(expectedCount).fill(null)
 				});
 			}, adapter.pageUploadWaitMs ?? Math.max(adapter.imageUploadWaitMs ?? 12000, expectedCount * 60000));
@@ -1213,6 +1254,11 @@
 		});
 
 		const uploads = Array.isArray(response?.uploads) ? response.uploads : [];
+		logXDiagnostic(adapter, "page-write-response", {
+			bodyWritten: response?.bodyWritten === true,
+			error: typeof response?.error === "string" ? response.error : "",
+			uploadCount: uploads.length
+		});
 		for (const upload of uploads) {
 			if (upload?.error) {
 				console.warn(`${adapter.id || "platform"} image upload failed.`, upload.error);
@@ -1221,6 +1267,7 @@
 		const uploaded = uploads.filter((upload) => upload?.ok || upload?.url || upload?.placed).length;
 		return {
 			inserted: response?.bodyWritten === true,
+			error: typeof response?.error === "string" ? response.error : "",
 			imageDelivery: "page-marker-upload",
 			imageIncluded: uploaded > 0,
 			imageTotal: assets.length,
@@ -1851,6 +1898,26 @@
 				rect: element.getBoundingClientRect()
 			}))
 			.sort((left, right) => left.rect.top - right.rect.top);
+	}
+
+	function logXDiagnostic(adapter, stage, details) {
+		if (adapter?.id === "x") {
+			console.info(`${X_DIAGNOSTIC_PREFIX} ${stage}`, details);
+		}
+	}
+
+	function describeWritableElement(element) {
+		if (!(element instanceof HTMLElement)) {
+			return null;
+		}
+		const rect = element.getBoundingClientRect();
+		return {
+			tag: element.tagName.toLowerCase(),
+			role: element.getAttribute("role") || "",
+			contentEditable: element.isContentEditable,
+			width: Math.round(rect.width),
+			height: Math.round(rect.height)
+		};
 	}
 
 	function isWritableElement(element) {
