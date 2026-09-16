@@ -311,6 +311,12 @@ function getTaskEditorReadiness(adapter) {
 }
 
 function getEditorReadinessMessage(readiness) {
+	if (readiness.reason?.startsWith("x_editor_required")) {
+		return "已打开 X Articles 草稿页。未找到“Write / 撰写”按钮，请手动进入文章编辑器后重试同步。";
+	}
+	if (readiness.reason === "x_creating_article") {
+		return "正在从 X Articles 草稿页创建文章，等待真实编辑器加载...";
+	}
 	if (readiness.reason?.startsWith("substack_editor_required")) {
 		return "已打开个人 Substack 后台。请点击 Create → Article，打开真正编辑器后再重试同步。";
 	}
