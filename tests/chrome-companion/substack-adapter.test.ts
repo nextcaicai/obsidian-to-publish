@@ -8,6 +8,7 @@ const substackAdapterPath = require.resolve("../../chrome-companion/src/platform
 type SubstackAdapter = {
 	matchesUrl(url: string): boolean;
 	getPageMode(url: string): "dashboard" | "editor" | "invalid";
+	getEditorReadiness(): { ready: boolean; terminal: boolean; reason: string };
 	prepareEditor(): Promise<{ ready: boolean; terminal: boolean; reason: string }>;
 	createActionLabels: string[];
 	articleActionLabels: string[];
@@ -37,18 +38,35 @@ describe("Substack companion adapter", () => {
 		delete require.cache[substackAdapterPath];
 	});
 
-	it("accepts only a personal dashboard or a draft-specific editor URL", () => {
+	it("accepts personal dashboard plus legacy and current draft-specific editor URLs", () => {
 		expect(adapter.matchesUrl("https://nextcaicai.substack.com/publish/home")).toBe(true);
 		expect(adapter.matchesUrl("https://nextcaicai.substack.com/publish/post/12345")).toBe(true);
+		expect(adapter.matchesUrl("https://nextcaicai.substack.com/publish/posts/12345")).toBe(true);
 		expect(adapter.matchesUrl("https://nextcaicai.substack.com/publish/post")).toBe(false);
+		expect(adapter.matchesUrl("https://nextcaicai.substack.com/publish/posts/drafts")).toBe(false);
 		expect(adapter.matchesUrl("https://substack.com/publish/post")).toBe(false);
 	});
 
 	it("keeps dashboard navigation distinct from a writable editor and uses exact Create then Article actions", () => {
 		expect(adapter.getPageMode("https://nextcaicai.substack.com/publish/home")).toBe("dashboard");
 		expect(adapter.getPageMode("https://nextcaicai.substack.com/publish/post/12345")).toBe("editor");
+		expect(adapter.getPageMode("https://nextcaicai.substack.com/publish/posts/12345")).toBe("editor");
 		expect(adapter.createActionLabels).toEqual(["Create", "新建"]);
 		expect(adapter.articleActionLabels).toEqual(["Article", "文章"]);
+	});
+
+	it("accepts the current editor's generic contenteditable body after finding its title", () => {
+		const title = { id: "title" };
+		const body = { id: "body" };
+		(globalThis as Record<string, unknown>).window = {
+			location: { href: "https://nextcaicai.substack.com/publish/posts/12345" }
+		};
+		(globalThis as Record<string, unknown>).document = {
+			querySelector: () => title,
+			querySelectorAll: () => [title, body]
+		};
+
+		expect(adapter.getEditorReadiness()).toEqual({ ready: true, terminal: false, reason: "" });
 	});
 
 	it("clicks Create before an Article action rendered as a non-semantic menu container", async () => {

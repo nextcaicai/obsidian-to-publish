@@ -1,6 +1,18 @@
 (function () {
 	const CREATE_LABELS = ["Create", "新建"];
 	const ARTICLE_LABELS = ["Article", "文章"];
+	const TITLE_SELECTORS = [
+		"textarea[placeholder*='Title']",
+		"input[placeholder*='Title']",
+		"[contenteditable='true'][data-placeholder*='Title' i]",
+		"[aria-label*='Title' i][contenteditable='true']"
+	];
+	const BODY_SELECTORS = [
+		".ProseMirror[contenteditable='true']",
+		"[contenteditable='true'][data-testid*='editor' i]",
+		"[contenteditable='true'][role='textbox']",
+		"[contenteditable='true']"
+	];
 
 	function getSubstackPageMode(value) {
 		try {
@@ -12,7 +24,7 @@
 			if (path === "/publish/home") {
 				return "dashboard";
 			}
-			return /^\/publish\/post\/[^/]+$/i.test(path) ? "editor" : "invalid";
+			return /^\/publish\/posts?\/(?!(?:drafts?|home)$)[^/]+$/i.test(path) ? "editor" : "invalid";
 		} catch {
 			return "invalid";
 		}
@@ -26,17 +38,9 @@
 		if (pageMode !== "editor") {
 			return { ready: false, terminal: true, reason: "substack_not_personal_editor" };
 		}
-		const hasTitle = document.querySelector([
-			"textarea[placeholder*='Title']",
-			"input[placeholder*='Title']",
-			"[contenteditable='true'][data-placeholder*='Title' i]",
-			"[aria-label*='Title' i][contenteditable='true']"
-		].join(","));
-		const hasBody = document.querySelector([
-			".ProseMirror[contenteditable='true']",
-			"[contenteditable='true'][data-testid*='editor' i]",
-			"[contenteditable='true'][role='textbox']"
-		].join(","));
+		const hasTitle = document.querySelector(TITLE_SELECTORS.join(","));
+		const hasBody = Array.from(document.querySelectorAll(BODY_SELECTORS.join(",")))
+			.some((element) => element !== hasTitle);
 		return hasTitle && hasBody
 			? { ready: true, terminal: false, reason: "" }
 			: { ready: false, terminal: false, reason: "substack_editor_dom_not_ready" };
@@ -162,17 +166,7 @@
 		preferPaste: true,
 		includeFilesInMainPaste: true,
 		pasteFilesAfterText: false,
-		titleSelectors: [
-			"textarea[placeholder*='Title']",
-			"input[placeholder*='Title']",
-			"[contenteditable='true'][data-placeholder*='Title' i]",
-			"[aria-label*='Title' i][contenteditable='true']"
-		],
-		bodySelectors: [
-			".ProseMirror[contenteditable='true']",
-			"[contenteditable='true'][data-testid*='editor' i]",
-			"[contenteditable='true'][role='textbox']",
-			"[contenteditable='true']"
-		]
+		titleSelectors: TITLE_SELECTORS,
+		bodySelectors: BODY_SELECTORS
 	});
 })();

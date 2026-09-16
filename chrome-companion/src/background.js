@@ -1257,7 +1257,7 @@ function isPersonalSubstackHost(hostname) {
 }
 
 function isSubstackEditorPath(pathname) {
-	return /^\/publish\/post\/[^/]+\/?$/i.test(pathname);
+	return /^\/publish\/posts?\/(?!(?:drafts?|home)\/?$)[^/]+\/?$/i.test(pathname);
 }
 
 function isPersonalSubstackPublisherUrl(value) {

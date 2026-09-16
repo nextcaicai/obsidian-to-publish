@@ -362,6 +362,39 @@ describe("Chrome companion background connection", () => {
 		expect(state.storage.substackEditorUrl).toBeUndefined();
 	});
 
+	it("keeps a Substack task active when the current plural editor route loads", async () => {
+		require(backgroundPath);
+		const state = (globalThis as {
+			__OTP_CHROME_MOCK_STATE__: {
+				storage: { substackEditorUrl?: string };
+			};
+		}).__OTP_CHROME_MOCK_STATE__;
+		const api = (globalThis as {
+			OTPCompanionBackground: {
+				importDraft(params: unknown): Promise<unknown>;
+				handleSubstackTaskNavigation(taskId: string, url: string): Promise<boolean>;
+			};
+		}).OTPCompanionBackground;
+		state.storage.substackEditorUrl = "https://nextcaicai.substack.com/publish/home";
+
+		await api.importDraft({
+			package: {
+				version: 1,
+				source: "obsidian-to-publish",
+				requestId: "pub_substack_plural_editor",
+				targets: ["substack"]
+			}
+		});
+		for (let index = 0; index < 8; index += 1) {
+			await Promise.resolve();
+		}
+
+		await expect(api.handleSubstackTaskNavigation(
+			"pub_substack_plural_editor",
+			"https://nextcaicai.substack.com/publish/posts/12345"
+		)).resolves.toBe(true);
+	});
+
 	it("normalizes pasted personal Substack URLs", () => {
 		require(backgroundPath);
 		const api = (globalThis as {

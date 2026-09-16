@@ -30,7 +30,7 @@ async function initCompanionPanel() {
 		return;
 	}
 
-	const response = await chrome.runtime.sendMessage({
+	const response = await sendRuntimeMessage({
 		type: "task.getLatest",
 		platform: adapter.id
 	});
@@ -48,7 +48,7 @@ async function rememberCurrentSubstackEditorUrl() {
 	}
 
 	try {
-		await chrome.runtime.sendMessage({
+		await sendRuntimeMessage({
 			type: "substack.rememberEditorUrl",
 			url: window.location.href
 		});
@@ -64,7 +64,7 @@ function isSubstackPublisherUrl(value) {
 		return url.protocol === "https:"
 			&& url.hostname.endsWith(".substack.com")
 			&& url.hostname !== "substack.com"
-			&& (path === "/publish/home" || /^\/publish\/post\/[^/]+$/i.test(path));
+			&& (path === "/publish/home" || /^\/publish\/posts?\/(?!(?:drafts?|home)$)[^/]+$/i.test(path));
 	} catch {
 		return false;
 	}
@@ -165,7 +165,7 @@ function renderPanel(task, adapter) {
 
 	const closeButton = createButton("关闭");
 	closeButton.addEventListener("click", async () => {
-		await chrome.runtime.sendMessage({
+		await sendRuntimeMessage({
 			type: "task.clearLatest",
 			platform: adapter.id,
 			taskId: task.id
@@ -176,6 +176,17 @@ function renderPanel(task, adapter) {
 
 	document.documentElement.appendChild(panel);
 	return panel;
+}
+
+async function sendRuntimeMessage(message) {
+	try {
+		return await chrome.runtime.sendMessage(message);
+	} catch {
+		// A content script can outlive an extension reload. Its old runtime context
+		// cannot report state any more, but it must not leak an unhandled error into
+		// the publisher page or prevent the user from dismissing this stale panel.
+		return null;
+	}
 }
 
 function createButton(text) {
