@@ -1,0 +1,4 @@
+{
+  "description": "Session title naming is supplied by the user-level ~/.codex/hooks.json hook. The local script remains as the original validation reference.",
+  "hooks": {}
+}

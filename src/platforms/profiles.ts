@@ -216,11 +216,11 @@ export const PLATFORM_PROFILES: Record<CopyPlatform, PlatformProfile> = {
 			},
 			{
 				selector: "ul,ol",
-				style: "margin:1em 0;padding-left:1.4em;"
+				style: "display:block;font-size:16px;margin:1em 0;padding-left:1.4em;"
 			},
 			{
 				selector: "li",
-				style: "color:#3f3f3f;line-height:1.8;margin:0.35em 0;"
+				style: "display:list-item;color:#3f3f3f;font-size:16px;line-height:1.8;margin:0.35em 0;"
 			},
 			{
 				selector: "blockquote",
@@ -572,9 +572,8 @@ function transformWechatArticle(root: HTMLElement) {
 }
 
 /**
- * Clean list DOM for WeChat.
- * Whitespace text nodes between <li> and sole <p> wrappers become empty bullets
- * after WeChat re-parses the HTML.
+ * Keep list markers, inline text and body typography together for WeChat.
+ * Only unwrap sole paragraphs; intentional block content keeps its structure.
  */
 function normalizeWechatListDom(root: HTMLElement) {
 	for (const list of Array.from(root.querySelectorAll("ul,ol"))) {
@@ -603,6 +602,38 @@ function normalizeWechatListDom(root: HTMLElement) {
 				listItem.insertBefore(paragraph.firstChild, paragraph);
 			}
 			paragraph.remove();
+		}
+
+		// WeChat can split direct inline siblings (e.g. strong + text) into
+		// separate lines. Keep each inline run together, without flattening
+		// intentional paragraphs, nested lists, blockquotes or code blocks.
+		let content: HTMLSpanElement | null = null;
+		for (const node of Array.from(listItem.childNodes)) {
+			if (node instanceof HTMLSpanElement && node.classList.contains("wechat-list-content")) {
+				content = null;
+				continue;
+			}
+			const isInline = node.nodeType === Node.TEXT_NODE
+				|| (node instanceof HTMLElement && node.matches("span,strong,b,em,i,a,code,br,mark,del,s,u,sub,sup,img"));
+			if (!isInline) {
+				content = null;
+				continue;
+			}
+			if (!content) {
+				content = document.createElement("span");
+				content.className = "wechat-list-content";
+				content.setAttribute("style", "display:inline;color:#3f3f3f;font-size:16px;line-height:1.8;");
+				listItem.insertBefore(content, node);
+			}
+			content.append(node);
+		}
+
+		// Computed Obsidian styles are already inlined at this point. Reset
+		// inline text explicitly so editor defaults cannot shrink it to 15px.
+		for (const inline of Array.from(listItem.querySelectorAll<HTMLElement>("span,strong,b,em,i,a,mark,del,s,u,sub,sup"))) {
+			if (!inline.closest("pre,code")) {
+				appendInlineStyle(inline, "display:inline;font-size:16px;");
+			}
 		}
 
 		const hasMedia = Boolean(listItem.querySelector("img,table,pre,ul,ol,blockquote"));
