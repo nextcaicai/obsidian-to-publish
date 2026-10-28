@@ -1,7 +1,7 @@
 {
 	"id": "obsidian-to-publish",
 	"name": "Obsidian to Publish",
-	"version": "0.2.2",
+	"version": "0.2.3",
 	"minAppVersion": "1.5.0",
 	"description": "Preview notes, copy platform-ready rich HTML/Markdown, and optionally create WeChat drafts, sync Feishu Docs, or import via a local Chrome companion.",
 	"author": "Next蔡蔡",

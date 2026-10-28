@@ -1,7 +1,7 @@
 {
 	"manifest_version": 3,
 	"name": "Obsidian to Publish Companion",
-	"version": "0.2.2",
+	"version": "0.2.3",
 	"description": "Receives Obsidian to Publish draft packages and helps import them into browser editors.",
 	"icons": {
 		"16": "icons/icon-16.png",
